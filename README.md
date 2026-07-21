@@ -66,6 +66,15 @@ downgrades** — a misconfigured tier fails loudly at startup.
 The **interface is identical** at every tier — only quality and infra differ.
 See [`.env.example`](.env.example) for all config.
 
+### Already have infrastructure? Bring it.
+
+DMem is plug-and-play. Point it at your **existing** Postgres+pgvector and graph
+DB — it creates only its own prefixed tables/labels (`IF NOT EXISTS`) and never
+touches yours — and pick your **embedding vendor** by name (OpenAI-compatible,
+Google, or Cohere) with just a key. Nothing is installed or recreated locally.
+The Docker Compose stack is only for greenfield users. See
+[`docs/bring-your-own.md`](docs/bring-your-own.md).
+
 ## Distribution surfaces (all thin adapters over one core)
 
 - **Python SDK** — `from dmem import DMemEngine` (above).

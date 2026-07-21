@@ -29,7 +29,8 @@ def build_store(cfg: Config, embed_dim: int) -> MemoryStore:
         from .graph_store import GraphStore
         from .pgvector_store import PgVectorStore
         graph = GraphStore(cfg.graph, hold_chunks=False, embed_dim=embed_dim)
-        docs = PgVectorStore(cfg.pgvector_url, embed_dim=embed_dim)  # type: ignore[arg-type]
+        docs = PgVectorStore(cfg.pgvector_url, embed_dim=embed_dim,  # type: ignore[arg-type]
+                             table_prefix=cfg.pgvector_table_prefix)
         return ProStore(graph, docs)
 
     raise ValueError(f"Unknown tier: {cfg.tier}")

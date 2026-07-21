@@ -20,7 +20,7 @@ from .base import GraphHit, VectorHit
 class PgVectorStore:
     """Document chunks in Postgres/pgvector. Facts are handled elsewhere."""
 
-    def __init__(self, url: str, embed_dim: int = 256):
+    def __init__(self, url: str, embed_dim: int = 256, table_prefix: str = "dmem"):
         try:
             import psycopg  # noqa: F401
         except ImportError as e:  # pragma: no cover
@@ -30,6 +30,12 @@ class PgVectorStore:
         self._psycopg = __import__("psycopg")
         self._url = url
         self._dim = embed_dim
+        # Validate the prefix (used in identifiers, so keep it strict).
+        import re
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_prefix):
+            raise StoreError(f"Invalid PGVECTOR_TABLE_PREFIX: {table_prefix!r}")
+        self._chunks = f"{table_prefix}_chunks"
+        self._meta = f"{table_prefix}_meta"
         self._conn = None
 
     def _connect(self):
@@ -39,10 +45,11 @@ class PgVectorStore:
 
     def initialize(self) -> None:
         conn = self._connect()
+        t = self._chunks
         try:
             conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
             conn.execute(
-                f"""CREATE TABLE IF NOT EXISTS dmem_chunks (
+                f"""CREATE TABLE IF NOT EXISTS {t} (
                     id TEXT PRIMARY KEY,
                     namespace TEXT NOT NULL,
                     document_id TEXT NOT NULL,
@@ -50,18 +57,13 @@ class PgVectorStore:
                     text TEXT NOT NULL, content_hash TEXT NOT NULL,
                     embedding vector({self._dim}),
                     metadata JSONB, provenance JSONB)""")
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS dmem_chunks_ns "
-                "ON dmem_chunks(namespace)")
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS dmem_chunks_hash "
-                "ON dmem_chunks(namespace, content_hash)")
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS dmem_chunks_hnsw ON dmem_chunks "
-                "USING hnsw (embedding vector_cosine_ops)")
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS dmem_meta "
-                "(key TEXT PRIMARY KEY, value TEXT)")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS {t}_ns ON {t}(namespace)")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS {t}_hash "
+                         f"ON {t}(namespace, content_hash)")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS {t}_hnsw ON {t} "
+                         f"USING hnsw (embedding vector_cosine_ops)")
+            conn.execute(f"CREATE TABLE IF NOT EXISTS {self._meta} "
+                         f"(key TEXT PRIMARY KEY, value TEXT)")
         except Exception as e:  # pragma: no cover - server dependent
             raise StoreError(f"pgvector initialize failed: {e}") from e
 
@@ -74,7 +76,7 @@ class PgVectorStore:
         conn = self._connect()
         for c in chunks:
             conn.execute(
-                """INSERT INTO dmem_chunks (id, namespace, document_id, concept,
+                f"""INSERT INTO {self._chunks} (id, namespace, document_id, concept,
                     section, ordinal, text, content_hash, embedding, metadata,
                     provenance)
                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
@@ -88,8 +90,8 @@ class PgVectorStore:
     def chunk_exists(self, namespace: str, content_hash: str) -> bool:
         conn = self._connect()
         row = conn.execute(
-            "SELECT 1 FROM dmem_chunks WHERE namespace=%s AND content_hash=%s "
-            "LIMIT 1", (namespace, content_hash)).fetchone()
+            f"SELECT 1 FROM {self._chunks} WHERE namespace=%s AND content_hash=%s "
+            f"LIMIT 1", (namespace, content_hash)).fetchone()
         return row is not None
 
     def vector_search(self, namespace, query_embedding, top_k,
@@ -98,9 +100,9 @@ class PgVectorStore:
             return []
         conn = self._connect()
         rows = conn.execute(
-            """SELECT id, text, document_id, concept, section,
+            f"""SELECT id, text, document_id, concept, section,
                       1 - (embedding <=> %s) AS score
-               FROM dmem_chunks WHERE namespace=%s
+               FROM {self._chunks} WHERE namespace=%s
                ORDER BY embedding <=> %s LIMIT %s""",
             (_vec(query_embedding), namespace, _vec(query_embedding), top_k)
         ).fetchall()
@@ -114,10 +116,10 @@ class PgVectorStore:
             return []
         conn = self._connect()
         rows = conn.execute(
-            """SELECT id, text, document_id, concept, section,
+            f"""SELECT id, text, document_id, concept, section,
                       ts_rank(to_tsvector('english', text),
                               plainto_tsquery('english', %s)) AS rank
-               FROM dmem_chunks
+               FROM {self._chunks}
                WHERE namespace=%s AND to_tsvector('english', text)
                      @@ plainto_tsquery('english', %s)
                ORDER BY rank DESC LIMIT %s""",
@@ -132,27 +134,27 @@ class PgVectorStore:
     # -- meta (table created in initialize) --------------------------------
     def get_meta(self, key: str):
         conn = self._connect()
-        row = conn.execute("SELECT value FROM dmem_meta WHERE key=%s",
+        row = conn.execute(f"SELECT value FROM {self._meta} WHERE key=%s",
                            (key,)).fetchone()
         return row[0] if row else None
 
     def set_meta(self, key: str, value: str) -> None:
         self._connect().execute(
-            "INSERT INTO dmem_meta (key, value) VALUES (%s,%s) "
-            "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (key, value))
+            f"INSERT INTO {self._meta} (key, value) VALUES (%s,%s) "
+            f"ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (key, value))
 
     def iter_chunks(self):
         conn = self._connect()
         rows = conn.execute(
-            "SELECT id, namespace, document_id, concept, section, ordinal, text "
-            "FROM dmem_chunks").fetchall()
+            f"SELECT id, namespace, document_id, concept, section, ordinal, text "
+            f"FROM {self._chunks}").fetchall()
         for r in rows:
             yield Chunk(text=r[6], document_id=r[2], concept=r[3], section=r[4],
                         ordinal=r[5], id=r[0], namespace=r[1])
 
     def delete_namespace(self, namespace: str) -> int:
         conn = self._connect()
-        cur = conn.execute("DELETE FROM dmem_chunks WHERE namespace=%s",
+        cur = conn.execute(f"DELETE FROM {self._chunks} WHERE namespace=%s",
                            (namespace,))
         return cur.rowcount or 0
 

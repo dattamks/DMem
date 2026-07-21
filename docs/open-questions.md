@@ -108,6 +108,27 @@ need a call from product/eng, ideally informed by real usage.
   the pro composite (graph facts + pgvector docs) has manual smoke instructions
   only. Add automated pro-tier integration tests.
 
+### Bring-your-own infrastructure (plug-and-play)
+- ✅ **Existing databases.** DMem points at an existing Postgres+pgvector / graph
+  DB and creates only its own prefixed objects with `IF NOT EXISTS` — never
+  touching adopter tables. `PGVECTOR_TABLE_PREFIX` makes the pgvector prefix
+  configurable (avoid collision / multi-instance). Documented in
+  `docs/bring-your-own.md`.
+- ✅ **Multi-vendor embeddings.** `EMBEDDING_PROVIDER` selects the API shape:
+  `openai` (OpenAI-compatible — Qwen/DashScope, vLLM, TEI, Ollama, Azure, …),
+  `google` (Gemini native), `cohere` (v2 native), `offline`. Vendor + key, no
+  local model.
+- ❓ **More native embedding adapters.** Voyage, Jina, Vertex-native, Bedrock
+  embeddings aren't native adapters yet (most work via the OpenAI-compatible
+  path if the vendor offers one). Add on demand.
+- ❓ **Graph label namespacing for shared Neo4j.** FalkorDB isolates via a named
+  graph; a shared Neo4j database relies on a dedicated `GRAPH_DB_DATABASE` since
+  labels (`Fact`/`Entity`/`Chunk`) aren't prefixed. A label-prefix option would
+  let DMem share one Neo4j database without a dedicated DB.
+- ❓ **Cohere asymmetric input types.** Uses `search_document` for everything;
+  `search_query` for queries would improve retrieval — needs query-vs-store
+  awareness in the embed path.
+
 ### Packaging / deployment
 - ✅ **Docker packaging.** `Dockerfile` (MCP server / proxy / eval entrypoints,
   non-root, `/data` volume) + `docker-compose.yml` (FalkorDB + proxy by default;

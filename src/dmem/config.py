@@ -147,6 +147,11 @@ def _get_float(env: dict[str, str], key: str, default: float) -> float:
 
 @dataclass
 class EmbeddingConfig:
+    # provider selects the API *shape*: "openai" (OpenAI-compatible — covers
+    # Qwen/DashScope, vLLM, TEI, Ollama, Azure, Together, ...), "google" (Gemini),
+    # "cohere", or "offline". Empty => auto: openai-compatible if a host_url is
+    # set, else the offline dev embedder.
+    provider: Optional[str] = None
     model: Optional[str] = None
     host_url: Optional[str] = None
     api_key: Optional[str] = None
@@ -154,7 +159,13 @@ class EmbeddingConfig:
 
     @property
     def is_remote(self) -> bool:
-        return bool(self.host_url)
+        return bool(self.host_url) or bool(self.provider and
+                                           self.provider.lower() in _REMOTE_PROVIDERS)
+
+
+# Providers that reach a remote endpoint even without an explicit host_url
+# (they have a well-known default base URL).
+_REMOTE_PROVIDERS = {"google", "gemini", "cohere"}
 
 
 @dataclass
@@ -206,6 +217,9 @@ class Config:
 
     # Pro-tier document store
     pgvector_url: Optional[str] = None
+    # Table/index name prefix — so DMem coexists in an existing Postgres without
+    # colliding with your tables. Change it to run multiple DMem instances in one DB.
+    pgvector_table_prefix: str = "dmem"
 
     # Graph backend (consolidated + pro)
     graph: GraphConfig = field(default_factory=GraphConfig)
@@ -243,6 +257,7 @@ class Config:
             tier=tier,
             sqlite_path=_get(env, "SQLITE_PATH", "DMEM_SQLITE_PATH") or "dmem.db",
             embedding=EmbeddingConfig(
+                provider=_get(env, "EMBEDDING_PROVIDER"),
                 model=_get(env, "EMBEDDING_MODEL"),
                 host_url=_get(env, "EMBEDDING_HOST_URL"),
                 api_key=_get(env, "EMBEDDING_API_KEY"),
@@ -258,6 +273,7 @@ class Config:
                 api_key=_get(env, "LLM_API_KEY"),
             ),
             pgvector_url=_get(env, "PGVECTOR_URL"),
+            pgvector_table_prefix=_get(env, "PGVECTOR_TABLE_PREFIX") or "dmem",
             graph=GraphConfig(
                 kind=GraphKind.coerce(env.get("GRAPH_DB")),
                 url=_get(env, "GRAPH_DB_URL"),
