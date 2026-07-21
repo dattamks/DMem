@@ -60,10 +60,16 @@ need a call from product/eng, ideally informed by real usage.
 - ❓ **Encryption at rest** for the SQLite file and embeddings — not implemented.
 
 ### Retrieval quality (all deferred to post-benchmark per spec)
+- ✅ **Day-one retrieval signal.** `dmem-eval` (the `dmem.eval` smoke harness)
+  reports hit@k / recall@k / MRR plus behavioral checks against a small labelled
+  dataset, so adopters can gauge retrieval quality for their config and measure
+  the lift from a real embedding endpoint — without the full LongMemEval setup.
+  Formal benchmarking (LongMemEval / LoCoMo / ConvoMem) remains deferred.
 - ❓ **Confidence threshold default** (`LOW_CONFIDENCE_THRESHOLD=0.15`) is a
   guess. Needs calibration against real retrieval score distributions — note the
   RRF-based fused scores are small in absolute terms, so this threshold is scale-
-  sensitive and should be tuned per embedding model.
+  sensitive and should be tuned per embedding model. (`dmem-eval` now gives a way
+  to observe those distributions.)
 - ❓ **Channel fusion weights** (`vector 1.0 / keyword 0.6 / graph 0.8`) and the
   **recency half-life** (30d) are untuned defaults.
 - ❓ **Heuristic extractor recall.** The offline pattern-based extractor catches

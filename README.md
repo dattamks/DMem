@@ -125,12 +125,26 @@ No memory logic is duplicated per surface.
 See [`docs/architecture.md`](docs/architecture.md) and
 [`docs/open-questions.md`](docs/open-questions.md).
 
+## Retrieval-quality smoke test
+
+Get a day-one signal on retrieval quality for your config (and measure the lift
+from plugging in a real embedding endpoint):
+
+```bash
+dmem-eval            # hit@k / recall@k / MRR + behavioral checks; exit 0/1 for CI
+dmem-eval --json
+```
+
+Lighter than formal benchmarking (which stays deferred) — see
+[`docs/evaluation.md`](docs/evaluation.md).
+
 ## Status & scope
 
-Alpha. Benchmarking (LongMemEval / LoCoMo) is **deferred** until there's real
-traffic to tune against, per the source spec — the built-in safeguards above are
-present from day one, calibration is not. Not in scope: billing, hosted proxy,
-provider markup — DMem is a self-contained library.
+Alpha. Formal benchmarking (LongMemEval / LoCoMo) is **deferred** until there's
+real traffic to tune against, per the source spec — the built-in safeguards
+above and the `dmem-eval` smoke harness are present from day one, threshold
+calibration is not. Not in scope: billing, hosted proxy, provider markup — DMem
+is a self-contained library.
 
 ## Development
 
