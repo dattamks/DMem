@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dmem"
+version = "0.1.0"
+description = "Pluggable, self-hostable AI memory & context library: persistent memory + document RAG + model-switch continuity."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Datta mks", email = "dattamks@gmail.com" }]
+keywords = ["llm", "memory", "rag", "context", "mcp", "knowledge-graph", "retrieval"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# Core has ZERO required third-party dependencies: the SQLite tier and the
+# offline dev fallbacks run on the standard library alone. Everything heavier
+# is an opt-in extra so the library installs into "any ecosystem" cleanly.
+dependencies = []
+
+[project.optional-dependencies]
+# Faster vector math for the SQLite tier (pure-Python fallback used otherwise).
+fast = ["numpy>=1.24"]
+# Real HTTP embedding / OCR endpoints without pulling a client per provider.
+http = ["httpx>=0.27"]
+# Consolidated / Pro graph backends.
+neo4j = ["neo4j>=5.11"]
+falkordb = ["falkordb>=1.0"]
+# Pro-tier document store.
+pgvector = ["psycopg[binary]>=3.1"]
+# Cross-encoder reranking (optional; core degrades to score-only without it).
+rerank = ["sentence-transformers>=3.0"]
+# MCP server adapter.
+mcp = ["mcp>=1.2"]
+# Everything, for maintainers.
+all = ["numpy>=1.24", "httpx>=0.27", "neo4j>=5.11", "psycopg[binary]>=3.1", "sentence-transformers>=3.0", "mcp>=1.2"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+dmem-mcp = "dmem.adapters.mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/dattamks/dmem"
+Repository = "https://github.com/dattamks/dmem"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dmem"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

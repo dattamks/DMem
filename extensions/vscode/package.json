@@ -1,0 +1,38 @@
+{
+  "name": "dmem-vscode",
+  "displayName": "DMem",
+  "description": "Persistent AI memory & context for your editor, backed by the DMem MCP server.",
+  "version": "0.1.0",
+  "publisher": "dmem",
+  "license": "MIT",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["AI", "Machine Learning", "Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "dmem.recall", "title": "DMem: Recall…" },
+      { "command": "dmem.rememberSelection", "title": "DMem: Remember Selection" },
+      { "command": "dmem.ingestFile", "title": "DMem: Ingest File" },
+      { "command": "dmem.handoff", "title": "DMem: Handoff" },
+      { "command": "dmem.forget", "title": "DMem: Forget Namespace…" }
+    ],
+    "configuration": {
+      "title": "DMem",
+      "properties": {
+        "dmem.serverCommand": {
+          "type": "string",
+          "default": "dmem-mcp",
+          "description": "Command that starts the DMem MCP server."
+        },
+        "dmem.memoryTier": {
+          "type": "string",
+          "enum": ["sqlite", "consolidated", "pro"],
+          "default": "sqlite",
+          "description": "Passed to the server as MEMORY_TIER."
+        }
+      }
+    }
+  },
+  "__note": "Scaffold only — dist/extension.js is not yet implemented. The extension is a thin MCP client over `dmem-mcp`; see README.md."
+}
