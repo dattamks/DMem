@@ -128,6 +128,19 @@ No memory logic is duplicated per surface.
 See [`docs/architecture.md`](docs/architecture.md) and
 [`docs/open-questions.md`](docs/open-questions.md).
 
+## Docker
+
+The SDK is a library, but the **MCP server** and **proxy** are containerized, and
+Compose brings up the backing stores too:
+
+```bash
+cp .env.example .env          # set embedding + upstream endpoints
+docker compose up --build     # FalkorDB (consolidated tier) + proxy on :8000
+```
+
+MCP-over-Docker (stdio) and pro-tier backends (Neo4j, pgvector) are in
+[`docs/docker.md`](docs/docker.md).
+
 ## Retrieval-quality smoke test
 
 Get a day-one signal on retrieval quality for your config (and measure the lift

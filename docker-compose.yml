@@ -1,0 +1,93 @@
+# DMem with Docker Compose.
+#
+# Default stack: FalkorDB (graph, consolidated tier) + the OpenAI-compatible
+# proxy. Bring your own embedding + upstream LLM endpoints via a .env file
+# (see .env.example). Start it with:
+#
+#     docker compose up --build
+#
+# The MCP server uses stdio, so it is NOT a long-running compose service — an
+# MCP client launches it on demand (see the `docker run -i` snippet in
+# docs/docker.md). A one-shot `mcp` service is included under a profile for
+# quick checks.
+#
+# Optional pro-tier backends (Neo4j, Postgres+pgvector) live under the `pro`
+# profile: `docker compose --profile pro up`.
+
+services:
+  falkordb:
+    image: falkordb/falkordb:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - falkordb-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  proxy:
+    build: .
+    command: >
+      uvicorn dmem.adapters.proxy:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    environment:
+      MEMORY_TIER: consolidated
+      GRAPH_DB: falkordb
+      GRAPH_DB_URL: redis://falkordb:6379
+      # Bring-your-own (set these in a .env file next to this compose file):
+      EMBEDDING_HOST_URL: ${EMBEDDING_HOST_URL:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      PROXY_UPSTREAM_URL: ${PROXY_UPSTREAM_URL:-}
+      PROXY_UPSTREAM_API_KEY: ${PROXY_UPSTREAM_API_KEY:-}
+    depends_on:
+      falkordb:
+        condition: service_healthy
+
+  # One-shot MCP server for a quick stdio check (normally launched by a client).
+  mcp:
+    build: .
+    profiles: ["mcp"]
+    stdin_open: true
+    tty: false
+    environment:
+      MEMORY_TIER: consolidated
+      GRAPH_DB: falkordb
+      GRAPH_DB_URL: redis://falkordb:6379
+      EMBEDDING_HOST_URL: ${EMBEDDING_HOST_URL:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+    depends_on:
+      falkordb:
+        condition: service_healthy
+
+  # ---- Optional pro-tier backends (docker compose --profile pro up) --------
+  neo4j:
+    image: neo4j:5
+    profiles: ["pro"]
+    environment:
+      NEO4J_AUTH: neo4j/password
+    ports:
+      - "7687:7687"
+      - "7474:7474"
+    volumes:
+      - neo4j-data:/data
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    profiles: ["pro"]
+    environment:
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: dmem
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+
+volumes:
+  falkordb-data:
+  neo4j-data:
+  pg-data:

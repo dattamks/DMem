@@ -108,6 +108,13 @@ need a call from product/eng, ideally informed by real usage.
   the pro composite (graph facts + pgvector docs) has manual smoke instructions
   only. Add automated pro-tier integration tests.
 
+### Packaging / deployment
+- ✅ **Docker packaging.** `Dockerfile` (MCP server / proxy / eval entrypoints,
+  non-root, `/data` volume) + `docker-compose.yml` (FalkorDB + proxy by default;
+  Neo4j + pgvector under the `pro` profile) + `docs/docker.md` covering SDK vs
+  MCP vs proxy, MCP-over-`docker run -i`, and running the graph integration
+  suite against the Compose stack. Compose config validated.
+
 ### Scale / operational
 - ❓ **SQLite vector search is O(n)** brute force. Fine for personal scale; at
   ~10⁵+ items it needs `sqlite-vec`/`vec0` ANN or a push to a higher tier. When
