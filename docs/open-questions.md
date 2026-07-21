@@ -76,6 +76,21 @@ need a call from product/eng, ideally informed by real usage.
   needs value-level semantics (the LLM `replaces` signal, or dimension tagging);
   today both accumulate and aren't flagged as a conflict. Acceptable for now.
 
+### Graph tier (consolidated / pro)
+- ✅ **Driver result-shape bug fixed.** Neo4j returns Record objects (nodes are
+  Mappings); FalkorDB returns positional `result_set` rows and its Node has no
+  `__getitem__` (only `.properties`). `_CypherDriver.run()` now normalizes both
+  to uniform dict rows; covered offline with fake drivers. All read paths in
+  `graph_store.py` were rewritten against the normalized shape.
+- ❓ **Vector-index dialect not validated live.** Neo4j (`db.index.vector.*`,
+  `CREATE VECTOR INDEX … OPTIONS`) and FalkorDB (`db.idx.vector.*`, its own DDL)
+  differ. Both branches are implemented in `_CypherDriver.create_vector_index` /
+  `vector_query` from documented syntax but **need validation against a live
+  server** — that's what `tests/integration` is for (gated on `DMEM_TEST_GRAPH_URL`).
+- ❓ **Pro-tier integration tests.** Consolidated tier has a live-server suite;
+  the pro composite (graph facts + pgvector docs) has manual smoke instructions
+  only. Add automated pro-tier integration tests.
+
 ### Scale / operational
 - ❓ **SQLite vector search is O(n)** brute force. Fine for personal scale; at
   ~10⁵+ items it needs `sqlite-vec`/`vec0` ANN or a push to a higher tier. When

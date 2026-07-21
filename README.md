@@ -136,7 +136,11 @@ provider markup — DMem is a self-contained library.
 
 ```bash
 pip install -e ".[dev]"
-pytest
+pytest                     # offline suite — no external services needed
 ```
+
+Graph-tier (Neo4j/FalkorDB) and pro-tier integration tests are gated behind env
+vars and skipped by default — see [`docs/testing.md`](docs/testing.md) for how to
+run them against a live server.
 
 MIT licensed.

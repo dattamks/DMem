@@ -1,30 +1,67 @@
 """Graph-backed store for the consolidated and pro tiers.
 
-Backends: Neo4j 5.11+ (native vector index) or FalkorDB. Both speak a Cypher
-dialect, so one implementation covers them with a thin driver shim.
+Backends: Neo4j 5.11+ (native vector index) or FalkorDB. They share most Cypher
+but diverge in two places that this module isolates in the driver shim:
 
-- Consolidated tier: this store holds BOTH facts and document chunks, using the
-  graph DB's native vector index for similarity — one server does both jobs.
-- Pro tier: this store holds facts/relationships only; documents live in
-  pgvector (see `ProStore`). This is where real multi-hop `graph_neighbors`
-  traversal and bi-temporal relationship modeling live.
+1. **Result shape.** Neo4j returns ``Record`` objects (``rec["f"]``) whose nodes
+   are Mapping-like (``node["id"]``). FalkorDB returns ``result_set`` as
+   positional lists whose nodes expose ``.properties`` and have **no**
+   ``__getitem__``. ``_CypherDriver.run()`` normalizes BOTH into a uniform
+   ``list[dict[str, Any]]`` (column-name -> value; nodes -> plain property
+   dicts) so the store logic is backend-neutral.
+2. **Vector index DDL + query.** Neo4j uses ``db.index.vector.queryNodes`` and
+   ``CREATE VECTOR INDEX``; FalkorDB uses ``db.idx.vector.queryNodes`` and its
+   own index DDL. These live in ``create_vector_index`` / ``vector_query``.
 
-Requires a running graph server; not exercised by the offline test suite. Kept
-behind lazy imports so the core package installs without these drivers.
+- Consolidated tier: this store holds BOTH facts and document chunks (one server
+  does both jobs via its native vector index).
+- Pro tier: facts/relationships only; documents live in pgvector (see
+  ``ProStore``).
+
+Requires a running graph server. The offline suite covers the row-normalization
+and store logic with a fake driver; end-to-end coverage lives in
+``tests/integration`` and runs only when ``DMEM_TEST_GRAPH_URL`` is set. The
+vector-index dialects in particular should be validated against a live server.
 """
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from ..config import GraphConfig, GraphKind
 from ..errors import StoreError
 from ..types import Chunk, Fact, FactType, Provenance
 from .base import GraphHit, VectorHit
 
+FACT_LABEL = "Fact"
+CHUNK_LABEL = "Chunk"
+FACT_VEC_INDEX = "dmem_fact_vec"
+CHUNK_VEC_INDEX = "dmem_chunk_vec"
+
+
+def _node_to_dict(value: Any) -> Any:
+    """Convert a driver node to a plain property dict; pass scalars through.
+
+    Handles Neo4j nodes (Mapping -> dict) and FalkorDB nodes (``.properties``).
+    """
+    if value is None:
+        return None
+    props = getattr(value, "properties", None)
+    if props is not None:  # FalkorDB Node
+        return dict(props)
+    # Neo4j Node / Record value is Mapping-like; scalars fall through unchanged.
+    try:
+        return dict(value)  # Neo4j Node supports dict(); str/float/int do not
+    except (TypeError, ValueError):
+        return value
+
+
+def _decode(name: Any) -> str:
+    return name.decode() if isinstance(name, (bytes, bytearray)) else str(name)
+
 
 class _CypherDriver:
-    """Minimal shim over Neo4j / FalkorDB so the store code is backend-neutral."""
+    """Backend-neutral shim over Neo4j / FalkorDB. Normalizes result rows."""
 
     def __init__(self, cfg: GraphConfig):
         self.kind = cfg.kind
@@ -52,12 +89,63 @@ class _CypherDriver:
         else:  # pragma: no cover
             raise StoreError("GRAPH_DB must be 'neo4j' or 'falkordb'.")
 
-    def run(self, query: str, **params):
+    def run(self, query: str, **params) -> list[dict[str, Any]]:
+        """Execute a query and return normalized rows (col name -> value)."""
         if self.kind is GraphKind.NEO4J:
             with self._driver.session(database=self._database) as s:
-                return list(s.run(query, **params))
+                result = s.run(query, **params)
+                return [
+                    {k: _node_to_dict(rec[k]) for k in rec.keys()}
+                    for rec in result
+                ]
+        # FalkorDB: positional result_set + separate header of [type, name] pairs
         result = self._graph.query(query, params)
-        return result.result_set
+        rows = getattr(result, "result_set", None) or []
+        header = getattr(result, "header", None) or []
+        names = [_decode(col[1] if isinstance(col, (list, tuple)) else col)
+                 for col in header]
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            if names and len(names) == len(row):
+                out.append({names[i]: _node_to_dict(row[i])
+                            for i in range(len(row))})
+            else:  # no header (writes) — index by position
+                out.append({str(i): _node_to_dict(v) for i, v in enumerate(row)})
+        return out
+
+    # -- backend-divergent vector operations -------------------------------
+    def create_vector_index(self, label: str, prop: str, index_name: str,
+                            dim: int) -> None:
+        """Create a cosine vector index. Dialect differs per backend."""
+        if self.kind is GraphKind.NEO4J:
+            self.run(
+                f"CREATE VECTOR INDEX {index_name} IF NOT EXISTS "
+                f"FOR (n:{label}) ON n.{prop} "
+                f"OPTIONS {{indexConfig: {{`vector.dimensions`: {dim}, "
+                f"`vector.similarity_function`: 'cosine'}}}}")
+        else:  # FalkorDB — validate DDL against your server version
+            try:
+                self.run(
+                    f"CREATE VECTOR INDEX FOR (n:{label}) ON (n.{prop}) "
+                    f"OPTIONS {{dimension: {dim}, similarityFunction: 'cosine'}}")
+            except Exception:  # pragma: no cover - older FalkorDB procedure form
+                self.run(
+                    f"CALL db.idx.vector.createNodeIndex('{label}', '{prop}', "
+                    f"{dim}, 'cosine')")
+
+    def vector_query(self, label: str, prop: str, index_name: str, k: int,
+                     vec: list[float], namespace: str) -> list[dict[str, Any]]:
+        """Return rows of {node, score} for the k nearest vectors in a namespace."""
+        if self.kind is GraphKind.NEO4J:
+            return self.run(
+                f"CALL db.index.vector.queryNodes($idx, $k, $vec) "
+                f"YIELD node, score WHERE node.namespace=$ns "
+                f"RETURN node, score", idx=index_name, k=k, vec=vec, ns=namespace)
+        # FalkorDB vector query (validate against your server version)
+        return self.run(
+            f"CALL db.idx.vector.queryNodes('{label}', '{prop}', $k, vecf32($vec)) "
+            f"YIELD node, score WHERE node.namespace=$ns RETURN node, score",
+            k=k, vec=vec, ns=namespace)
 
     def close(self):
         if self.kind is GraphKind.NEO4J:
@@ -67,37 +155,28 @@ class _CypherDriver:
 class GraphStore:
     """Facts (+ chunks on consolidated tier) in a Cypher graph DB."""
 
-    def __init__(self, cfg: GraphConfig, *, hold_chunks: bool, embed_dim: int = 256):
+    def __init__(self, cfg: GraphConfig, *, hold_chunks: bool, embed_dim: int = 256,
+                 driver: Optional[Any] = None):
         self.tier = "consolidated" if hold_chunks else "pro"
         self._cfg = cfg
         self._hold_chunks = hold_chunks
         self._embed_dim = embed_dim
-        self._d = _CypherDriver(cfg)
+        # `driver` injectable for offline testing with a fake.
+        self._d = driver if driver is not None else _CypherDriver(cfg)
 
     def initialize(self) -> None:
-        # Uniqueness + vector index. Guarded so re-init is idempotent.
         try:
             self._d.run(
                 "CREATE CONSTRAINT dmem_fact_id IF NOT EXISTS "
-                "FOR (f:Fact) REQUIRE f.id IS UNIQUE"
-            )
+                "FOR (f:Fact) REQUIRE f.id IS UNIQUE")
             self._d.run(
                 "CREATE CONSTRAINT dmem_entity_name IF NOT EXISTS "
-                "FOR (e:Entity) REQUIRE (e.namespace, e.name) IS UNIQUE"
-            )
-            self._d.run(
-                f"CREATE VECTOR INDEX dmem_fact_vec IF NOT EXISTS "
-                f"FOR (f:Fact) ON f.embedding "
-                f"OPTIONS {{indexConfig: {{`vector.dimensions`: {self._embed_dim}, "
-                f"`vector.similarity_function`: 'cosine'}}}}"
-            )
+                "FOR (e:Entity) REQUIRE (e.namespace, e.name) IS UNIQUE")
+            self._d.create_vector_index(FACT_LABEL, "embedding", FACT_VEC_INDEX,
+                                        self._embed_dim)
             if self._hold_chunks:
-                self._d.run(
-                    f"CREATE VECTOR INDEX dmem_chunk_vec IF NOT EXISTS "
-                    f"FOR (c:Chunk) ON c.embedding "
-                    f"OPTIONS {{indexConfig: {{`vector.dimensions`: {self._embed_dim}, "
-                    f"`vector.similarity_function`: 'cosine'}}}}"
-                )
+                self._d.create_vector_index(CHUNK_LABEL, "embedding",
+                                            CHUNK_VEC_INDEX, self._embed_dim)
         except Exception as e:  # pragma: no cover - server dependent
             raise StoreError(f"Graph initialize failed: {e}") from e
 
@@ -131,7 +210,7 @@ class GraphStore:
         rows = self._d.run(
             "MATCH (f:Fact {namespace:$ns, dedup_key:$dk}) "
             "WHERE f.valid_to IS NULL RETURN f LIMIT 1", ns=namespace, dk=dedup_key)
-        return _row_to_fact(rows[0]) if rows else None
+        return _node_to_fact(rows[0]["f"]) if rows else None
 
     def find_current_facts(self, namespace: str, subject: str,
                            predicate: str) -> list[Fact]:
@@ -139,7 +218,7 @@ class GraphStore:
             "MATCH (f:Fact {namespace:$ns}) WHERE toLower(f.subject)=$s "
             "AND toLower(f.predicate)=$p AND f.valid_to IS NULL RETURN f",
             ns=namespace, s=subject.lower(), p=predicate.lower())
-        return [_row_to_fact(r) for r in rows]
+        return [_node_to_fact(r["f"]) for r in rows]
 
     def close_fact(self, fact_id: str, valid_to: float) -> None:
         self._d.run(
@@ -148,16 +227,13 @@ class GraphStore:
 
     def get_fact(self, fact_id: str) -> Optional[Fact]:
         rows = self._d.run("MATCH (f:Fact {id:$id}) RETURN f", id=fact_id)
-        return _row_to_fact(rows[0]) if rows else None
+        return _node_to_fact(rows[0]["f"]) if rows else None
 
     def delete_fact(self, fact_id: str) -> bool:
         rows = self._d.run(
             "MATCH (f:Fact {id:$id}) DETACH DELETE f RETURN count(f) AS c",
             id=fact_id)
-        try:
-            return bool(rows and int(rows[0]["c"]) > 0)
-        except Exception:  # pragma: no cover
-            return False
+        return _count(rows) > 0
 
     def delete_facts(self, namespace: str, *, subject=None, predicate=None,
                      object=None) -> int:
@@ -177,10 +253,7 @@ class GraphStore:
         rows = self._d.run(
             f"MATCH (f:Fact) WHERE {' AND '.join(clauses)} "
             f"DETACH DELETE f RETURN count(f) AS c", **params)
-        try:
-            return int(rows[0]["c"]) if rows else 0
-        except Exception:  # pragma: no cover
-            return 0
+        return _count(rows)
 
     # -- documents (consolidated tier only) --------------------------------
     def upsert_chunks(self, chunks: Sequence[Chunk]) -> None:
@@ -209,31 +282,24 @@ class GraphStore:
                       kinds=("fact", "chunk")) -> list[VectorHit]:
         hits: list[VectorHit] = []
         if "fact" in kinds:
-            rows = self._d.run(
-                "CALL db.index.vector.queryNodes('dmem_fact_vec', $k, $q) "
-                "YIELD node, score WHERE node.namespace=$ns RETURN node, score",
-                k=top_k, q=query_embedding, ns=namespace)
-            for r in rows:
+            for r in self._d.vector_query(FACT_LABEL, "embedding", FACT_VEC_INDEX,
+                                          top_k, query_embedding, namespace):
                 n = r["node"]
                 hits.append(VectorHit(id=n["id"], text=_fact_text(n),
-                                      score=float(r["score"]), kind="fact",
-                                      payload=dict(n)))
+                                      score=float(r.get("score", 0.0)),
+                                      kind="fact", payload=n))
         if "chunk" in kinds and self._hold_chunks:
-            rows = self._d.run(
-                "CALL db.index.vector.queryNodes('dmem_chunk_vec', $k, $q) "
-                "YIELD node, score WHERE node.namespace=$ns RETURN node, score",
-                k=top_k, q=query_embedding, ns=namespace)
-            for r in rows:
+            for r in self._d.vector_query(CHUNK_LABEL, "embedding", CHUNK_VEC_INDEX,
+                                          top_k, query_embedding, namespace):
                 n = r["node"]
-                hits.append(VectorHit(id=n["id"], text=n["text"],
-                                      score=float(r["score"]), kind="chunk",
-                                      payload=dict(n)))
+                hits.append(VectorHit(id=n["id"], text=n.get("text", ""),
+                                      score=float(r.get("score", 0.0)),
+                                      kind="chunk", payload=n))
         hits.sort(key=lambda h: h.score, reverse=True)
         return hits[:top_k]
 
     def keyword_search(self, namespace, query, top_k,
                        kinds=("fact", "chunk")) -> list[VectorHit]:
-        # CONTAINS-based fallback; a full-text index is a future optimization.
         import re
         toks = list({t for t in re.findall(r"[a-z0-9]+", query.lower())})[:8]
         if not toks:
@@ -247,7 +313,16 @@ class GraphStore:
             for r in rows:
                 n = r["f"]
                 hits.append(VectorHit(id=n["id"], text=_fact_text(n), score=0.5,
-                                      kind="fact", payload=dict(n)))
+                                      kind="fact", payload=n))
+        if "chunk" in kinds and self._hold_chunks:
+            rows = self._d.run(
+                "MATCH (c:Chunk {namespace:$ns}) WHERE any(t IN $toks WHERE "
+                "toLower(c.text) CONTAINS t) RETURN c LIMIT $k",
+                ns=namespace, toks=toks, k=top_k)
+            for r in rows:
+                n = r["c"]
+                hits.append(VectorHit(id=n["id"], text=n.get("text", ""),
+                                      score=0.5, kind="chunk", payload=n))
         return hits[:top_k]
 
     def graph_neighbors(self, namespace, seeds, max_hops=1, limit=20) -> list[GraphHit]:
@@ -259,33 +334,26 @@ class GraphStore:
                 RETURN DISTINCT f LIMIT $lim""",
             ns=namespace, seeds=[s.lower() for s in seeds], lim=limit)
         return [GraphHit(id=r["f"]["id"], text=_fact_text(r["f"]), hops=1,
-                         payload=dict(r["f"])) for r in rows]
+                         payload=r["f"]) for r in rows]
 
     # -- meta --------------------------------------------------------------
     def get_meta(self, key: str) -> Optional[str]:
-        rows = self._d.run("MATCH (m:DMemMeta {key:$k}) RETURN m.value AS v",
-                           k=key)
-        try:
-            return rows[0]["v"] if rows else None
-        except Exception:  # pragma: no cover
-            return None
+        rows = self._d.run("MATCH (m:DMemMeta {key:$k}) RETURN m.value AS v", k=key)
+        return rows[0].get("v") if rows else None
 
     def set_meta(self, key: str, value: str) -> None:
-        self._d.run(
-            "MERGE (m:DMemMeta {key:$k}) SET m.value=$v", k=key, v=value)
+        self._d.run("MERGE (m:DMemMeta {key:$k}) SET m.value=$v", k=key, v=value)
 
     def iter_facts(self):
-        rows = self._d.run("MATCH (f:Fact) RETURN f")
-        for r in rows:
-            yield _row_to_fact(r)
+        for r in self._d.run("MATCH (f:Fact) RETURN f"):
+            yield _node_to_fact(r["f"])
 
     def iter_chunks(self):
         if not self._hold_chunks:
             return
-        rows = self._d.run("MATCH (c:Chunk) RETURN c")
-        for r in rows:
+        for r in self._d.run("MATCH (c:Chunk) RETURN c"):
             n = r["c"]
-            yield Chunk(text=n["text"], document_id=n["document_id"],
+            yield Chunk(text=n.get("text", ""), document_id=n.get("document_id", ""),
                         concept=n.get("concept"), section=n.get("section"),
                         ordinal=n.get("ordinal", 0), id=n["id"],
                         namespace=n["namespace"], embedding=n.get("embedding"))
@@ -294,33 +362,31 @@ class GraphStore:
         rows = self._d.run(
             "MATCH (n {namespace:$ns}) DETACH DELETE n RETURN count(n) AS c",
             ns=namespace)
-        try:
-            return int(rows[0]["c"]) if rows else 0
-        except Exception:  # pragma: no cover
-            return 0
+        return _count(rows)
 
 
-def _fact_text(n) -> str:
-    return f"{n['subject']} {n['predicate']} {n['object']}".strip()
+def _fact_text(n: dict) -> str:
+    return f"{n.get('subject','')} {n.get('predicate','')} {n.get('object','')}".strip()
 
 
-def _row_to_fact(row) -> Fact:
-    n = row["f"] if "f" in _keys(row) else row["node"] if "node" in _keys(row) else row[0]
-    prov = None
+def _count(rows: list[dict]) -> int:
+    if not rows:
+        return 0
+    val = rows[0].get("c", 0)
+    try:
+        return int(val)
+    except (TypeError, ValueError):  # pragma: no cover
+        return 0
+
+
+def _node_to_fact(n: dict) -> Fact:
     return Fact(
         subject=n["subject"], predicate=n["predicate"], object=n["object"],
         fact_type=FactType.coerce(n.get("fact_type")),
-        provenance=prov, id=n["id"], namespace=n["namespace"],
+        provenance=None, id=n["id"], namespace=n["namespace"],
         confidence=n.get("confidence", 1.0), embedding=n.get("embedding"),
         valid_from=n.get("valid_from"), valid_to=n.get("valid_to"),
         recorded_at=n.get("recorded_at"), supersedes=n.get("supersedes"))
-
-
-def _keys(row):
-    try:
-        return set(row.keys())
-    except Exception:  # pragma: no cover
-        return set()
 
 
 def _hash(text: str) -> str:

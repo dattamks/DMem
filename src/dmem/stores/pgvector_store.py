@@ -129,11 +129,7 @@ class PgVectorStore:
     def graph_neighbors(self, namespace, seeds, max_hops=1, limit=20) -> list[GraphHit]:
         return []  # documents have no graph edges; facts handle this
 
-    # -- meta --------------------------------------------------------------
-    def initialize_meta(self) -> None:
-        self._connect().execute(
-            "CREATE TABLE IF NOT EXISTS dmem_meta (key TEXT PRIMARY KEY, value TEXT)")
-
+    # -- meta (table created in initialize) --------------------------------
     def get_meta(self, key: str):
         conn = self._connect()
         row = conn.execute("SELECT value FROM dmem_meta WHERE key=%s",
