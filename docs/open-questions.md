@@ -108,6 +108,23 @@ need a call from product/eng, ideally informed by real usage.
   the pro composite (graph facts + pgvector docs) has manual smoke instructions
   only. Add automated pro-tier integration tests.
 
+### Product stance: BYO-only, pro is the product
+- ✅ **Mandatory prerequisites, fail fast.** `pro` is the default and the only
+  supported production tier: a graph DB + Postgres/pgvector + an embedding
+  endpoint are all mandatory BYO env vars. Missing any → `ConfigError` at startup
+  with an actionable message. DMem never installs/provisions/bootstraps — the
+  bootstrap idea was dropped by decision.
+- ✅ **Active pgvector check.** On connect, DMem verifies the `vector` extension
+  is enabled, tries to enable it, and otherwise fails with the exact fix
+  (`CREATE EXTENSION vector;` / install pgvector). `ensure_pgvector` is unit-
+  tested via a fake connection.
+- ✅ **`dmem-doctor` preflight.** Inspects env, reports READY/NOT-READY per
+  prerequisite with fixes, live-probes pgvector + graph reachability, redacts
+  credentials, exits 0/1. MCP server prints it to stderr instead of a traceback
+  when prereqs are missing.
+- ✅ **`sqlite`/`consolidated` demoted to dev/test only** (explicit opt-in,
+  flagged by doctor). Retained for the offline test suite and local dev.
+
 ### Bring-your-own infrastructure (plug-and-play)
 - ✅ **Existing databases.** DMem points at an existing Postgres+pgvector / graph
   DB and creates only its own prefixed objects with `IF NOT EXISTS` — never

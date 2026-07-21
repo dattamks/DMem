@@ -48,6 +48,7 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 [project.scripts]
 dmem-mcp = "dmem.adapters.mcp_server:main"
 dmem-eval = "dmem.eval.harness:main"
+dmem-doctor = "dmem.doctor:main"
 
 [project.urls]
 Homepage = "https://github.com/dattamks/dmem"

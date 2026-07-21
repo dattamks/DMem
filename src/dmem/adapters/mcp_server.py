@@ -86,10 +86,23 @@ def _dispatch(engine: DMemEngine, name: str, arguments: dict) -> dict:
 def main() -> None:  # pragma: no cover - entry point
     """Console-script entry point: run the stdio MCP server."""
     import asyncio
+    import sys
+
+    from ..errors import ConfigError
 
     from mcp.server.stdio import stdio_server
 
-    engine = DMemEngine()
+    try:
+        engine = DMemEngine()
+    except ConfigError as e:
+        # Missing bring-your-own prerequisites: print a clear preflight to stderr
+        # (stdout is the MCP stream) instead of a stack trace, then exit.
+        from ..doctor import format_report, run_checks
+        print("DMem MCP server cannot start — prerequisites missing.\n",
+              file=sys.stderr)
+        print(format_report(run_checks(live=False)), file=sys.stderr)
+        print(f"\n{e}", file=sys.stderr)
+        sys.exit(1)
 
     async def _run():
         server = build_server(engine)

@@ -17,63 +17,59 @@ forever. DMem persists **typed facts** and **document knowledge** across
 sessions and model switches, and hands a new model a **compact, token-budgeted
 summary** instead of the full transcript.
 
-## Install
+## Prerequisites (bring your own)
+
+DMem is **bring-your-own-infrastructure** — it never installs or provisions
+anything. The production tier (`pro`, the default) has three **mandatory**
+prerequisites you point it at via env vars:
+
+1. a **graph database** (`GRAPH_DB` = `neo4j` | `falkordb`, `GRAPH_DB_URL`)
+2. a **Postgres + pgvector** database (`PGVECTOR_URL`)
+3. an **embedding endpoint** (`EMBEDDING_PROVIDER` — OpenAI-compatible, `google`, or `cohere` — + key)
+
+If any is missing, DMem stops at startup with an actionable message — it never
+silently downgrades. Full details in [`docs/prerequisites.md`](docs/prerequisites.md).
+
+## Install & verify
 
 ```bash
-pip install dmem                # core: zero third-party deps, SQLite tier
-pip install "dmem[http]"        # + remote embedding / OCR / LLM endpoints
-pip install "dmem[mcp]"         # + MCP server adapter
-pip install "dmem[neo4j]"       # consolidated / pro graph backend
-pip install "dmem[pgvector]"    # pro-tier document store
-pip install "dmem[rerank]"      # cross-encoder reranking
+pip install "dmem[neo4j,pgvector,http]"    # client libs for your backends
+dmem-doctor                                 # checks your prereqs (incl. pgvector enabled)
 ```
 
-## Quick start (zero setup)
+`dmem-doctor` inspects your environment, live-probes that pgvector is enabled on
+your Postgres, and reports READY / NOT READY with the fix for each gap.
+
+## Quick start
 
 ```python
-from dmem import DMemEngine
+from dmem import DMemEngine   # reads config from env; fails fast if prereqs missing
 
-mem = DMemEngine()   # MEMORY_TIER=sqlite by default; no server required
-
+mem = DMemEngine()
 mem.ingest_message("My name is Ada and I prefer Rust. I work at Analytical Engines.")
 mem.ingest_document("# Runbook\n\nProd runs Postgres 16 in AWS us-east-1.",
                     document_id="runbook")
 
-handoff = mem.handoff("who is the user and where is prod?")
-print(handoff.text)
-# Context handoff (compact):
-# - user has_name Ada
-# - user works_at Analytical Engines
-# - user prefers Rust
-# - [Runbook] Prod runs Postgres 16 in AWS us-east-1.
+print(mem.handoff("who is the user and where is prod?").text)
 ```
 
-Out of the box this uses an **offline hashing embedder** (dev quality, warns on
-use). Point `EMBEDDING_HOST_URL` at any OpenAI-compatible `/embeddings` endpoint
-for production quality — nothing about a provider is hardcoded.
+Point it at your **existing** databases — DMem creates only its own prefixed
+tables/labels (`IF NOT EXISTS`) and never touches yours. See
+[`docs/bring-your-own.md`](docs/bring-your-own.md).
 
 ## Tiers
 
-Pick explicitly via `MEMORY_TIER`. DMem **never auto-detects and never silently
-downgrades** — a misconfigured tier fails loudly at startup.
+`pro` is the product. The other two are **dev/test only** (explicit opt-in, not a
+supported production setup):
 
-| Tier | Backends | Setup | Retrieval quality |
-|---|---|---|---|
-| `sqlite` *(default)* | SQLite + brute-force vectors; facts as validity-window rows | none | good for personal / single-project scale |
-| `consolidated` | one graph DB with native vectors (Neo4j 5.11+ or FalkorDB) | one server | middle ground, real graph traversal |
-| `pro` | dedicated Postgres+pgvector (documents) + Graphiti-backed graph (facts, bi-temporal) | two servers | best |
+| Tier | Backends | Use |
+|---|---|---|
+| `pro` *(default)* | your graph DB (facts) + Postgres/pgvector (documents) + embedding endpoint | **production** |
+| `consolidated` | one graph DB doing both jobs | dev/test |
+| `sqlite` | single file, no servers, offline embedder | dev/test |
 
-The **interface is identical** at every tier — only quality and infra differ.
-See [`.env.example`](.env.example) for all config.
-
-### Already have infrastructure? Bring it.
-
-DMem is plug-and-play. Point it at your **existing** Postgres+pgvector and graph
-DB — it creates only its own prefixed tables/labels (`IF NOT EXISTS`) and never
-touches yours — and pick your **embedding vendor** by name (OpenAI-compatible,
-Google, or Cohere) with just a key. Nothing is installed or recreated locally.
-The Docker Compose stack is only for greenfield users. See
-[`docs/bring-your-own.md`](docs/bring-your-own.md).
+The **interface is identical** at every tier. See [`.env.example`](.env.example)
+for all config.
 
 ## Distribution surfaces (all thin adapters over one core)
 

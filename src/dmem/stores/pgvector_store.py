@@ -46,8 +46,10 @@ class PgVectorStore:
     def initialize(self) -> None:
         conn = self._connect()
         t = self._chunks
+        # Mandatory prerequisite check: is pgvector actually enabled? Notify
+        # clearly instead of failing later on an unknown `vector` type.
+        ensure_pgvector(conn)
         try:
-            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
             conn.execute(
                 f"""CREATE TABLE IF NOT EXISTS {t} (
                     id TEXT PRIMARY KEY,
@@ -157,6 +159,38 @@ class PgVectorStore:
         cur = conn.execute(f"DELETE FROM {self._chunks} WHERE namespace=%s",
                            (namespace,))
         return cur.rowcount or 0
+
+
+def ensure_pgvector(conn) -> str:
+    """Verify the pgvector extension is enabled on the connected database.
+
+    - Already enabled -> returns "enabled".
+    - Available but not enabled -> tries to enable it; on success returns
+      "created", on failure raises with the exact fix.
+    - Not installed on the server at all -> raises with install guidance.
+
+    DMem never provisions infrastructure; this only *checks and notifies*.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM pg_extension WHERE extname = 'vector'").fetchone()
+    if row:
+        return "enabled"
+    avail = conn.execute(
+        "SELECT 1 FROM pg_available_extensions WHERE name = 'vector'").fetchone()
+    if not avail:
+        raise StoreError(
+            "pgvector is NOT installed on this PostgreSQL server. DMem's pro tier "
+            "requires it. Install pgvector (https://github.com/pgvector/pgvector) "
+            "on the server, then run:  CREATE EXTENSION vector;")
+    try:
+        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    except Exception as e:
+        raise StoreError(
+            "pgvector is available on this server but not enabled on this "
+            "database, and the DMem role lacks permission to enable it. Ask a "
+            "superuser to run:  CREATE EXTENSION vector;  "
+            f"(underlying error: {e})") from e
+    return "created"
 
 
 def _vec(embedding) -> str:

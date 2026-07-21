@@ -24,14 +24,19 @@ from .types import Cardinality
 
 
 class Tier(str, Enum):
-    SQLITE = "sqlite"              # zero-setup default, no server
-    CONSOLIDATED = "consolidated"  # one graph DB w/ native vectors
-    PRO = "pro"                   # pgvector + dedicated Graphiti-backed graph
+    # PRO is the product: a graph DB (facts) + Postgres/pgvector (documents) +
+    # an embedding endpoint, all bring-your-own and mandatory. It is the default.
+    PRO = "pro"
+    # The two below are DEV/TEST ONLY — explicit opt-in, not a supported
+    # production configuration. sqlite = single-file, no servers;
+    # consolidated = one graph DB doing both jobs.
+    SQLITE = "sqlite"
+    CONSOLIDATED = "consolidated"
 
     @classmethod
     def coerce(cls, value: Optional[str]) -> "Tier":
         if not value:
-            return cls.SQLITE
+            return cls.PRO
         try:
             return cls(value.strip().lower())
         except ValueError as e:
@@ -39,6 +44,10 @@ class Tier(str, Enum):
                 f"MEMORY_TIER={value!r} is invalid. "
                 f"Choose one of: {', '.join(t.value for t in cls)}."
             ) from e
+
+    @property
+    def is_dev(self) -> bool:
+        return self in (Tier.SQLITE, Tier.CONSOLIDATED)
 
 
 class GraphKind(str, Enum):
@@ -205,9 +214,9 @@ class LLMConfig:
 
 @dataclass
 class Config:
-    tier: Tier = Tier.SQLITE
+    tier: Tier = Tier.PRO
 
-    # SQLite tier
+    # SQLite tier (dev/test only)
     sqlite_path: str = "dmem.db"
 
     # Pluggable providers
@@ -300,33 +309,47 @@ class Config:
 
     # --------------------------------------------------------------------- #
     def validate(self) -> None:
-        """Fail fast for the chosen tier. Never silently downgrade."""
+        """Fail fast for the chosen tier. Never silently downgrade.
+
+        DMem is bring-your-own-infrastructure. The PRO tier (the product) has
+        three MANDATORY prerequisites you must supply — a graph DB, a
+        Postgres/pgvector database, and an embedding endpoint. DMem never
+        installs or provisions them; if they're missing it stops here with an
+        actionable message."""
         missing: list[str] = []
 
         if self.tier is Tier.PRO:
-            if not self.pgvector_url:
-                missing.append("PGVECTOR_URL (required for tier=pro)")
-            if not self.graph.url:
-                missing.append("GRAPH_DB_URL (required for tier=pro)")
             if not self.graph.kind:
-                missing.append("GRAPH_DB (neo4j|falkordb, required for tier=pro)")
+                missing.append(
+                    "GRAPH_DB — your graph database type (neo4j | falkordb)")
+            if not self.graph.url:
+                missing.append(
+                    "GRAPH_DB_URL — URL of your existing graph database")
+            if not self.pgvector_url:
+                missing.append(
+                    "PGVECTOR_URL — URL of your existing Postgres (with pgvector)")
+            if not self.embedding.is_remote:
+                missing.append(
+                    "EMBEDDING_PROVIDER (+ EMBEDDING_HOST_URL / EMBEDDING_API_KEY) "
+                    "— your embedding endpoint")
 
-        elif self.tier is Tier.CONSOLIDATED:
+        elif self.tier is Tier.CONSOLIDATED:  # dev/test only
             if not self.graph.url:
                 missing.append("GRAPH_DB_URL (required for tier=consolidated)")
             if not self.graph.kind:
                 missing.append(
-                    "GRAPH_DB (neo4j|falkordb, required for tier=consolidated)"
-                )
+                    "GRAPH_DB (neo4j|falkordb, required for tier=consolidated)")
 
         if missing:
+            hint = ("\n\nThese are mandatory prerequisites you bring yourself — "
+                    "DMem does not install them. See docs/prerequisites.md. "
+                    "(For local dev only you may set MEMORY_TIER=sqlite.)"
+                    if self.tier is Tier.PRO else
+                    "\n\nSet these environment variables. DMem will not silently "
+                    "downgrade.")
             raise ConfigError(
-                f"tier={self.tier.value} is missing required configuration:\n  - "
-                + "\n  - ".join(missing)
-                + "\n\nSet these environment variables, or choose a lower tier "
-                "explicitly with MEMORY_TIER=sqlite. DMem will not silently "
-                "downgrade."
-            )
+                f"MEMORY_TIER={self.tier.value} is missing required "
+                f"configuration:\n  - " + "\n  - ".join(missing) + hint)
 
         if self.handoff_token_budget <= 0:
             raise ConfigError("HANDOFF_TOKEN_BUDGET must be > 0.")
