@@ -89,5 +89,11 @@ class ProStore:
     def graph_neighbors(self, ns, seeds, max_hops=1, limit=20) -> list[GraphHit]:
         return self._graph.graph_neighbors(ns, seeds, max_hops, limit)
 
+    # meta canonical in the graph store; chunks iterate from pgvector
+    def get_meta(self, key): return self._graph.get_meta(key)
+    def set_meta(self, key, value): self._graph.set_meta(key, value)
+    def iter_facts(self): return self._graph.iter_facts()
+    def iter_chunks(self): return self._docs.iter_chunks()
+
     def delete_namespace(self, ns) -> int:
         return self._graph.delete_namespace(ns) + self._docs.delete_namespace(ns)

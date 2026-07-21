@@ -95,6 +95,15 @@ No memory logic is duplicated per surface.
   tables are kept whole.
 - **Token-budgeted handoff** — hard cap; lowest-priority facts drop first,
   never arbitrary truncation. Credentials are withheld from the handoff blob.
+- **Cardinality-aware contradictions** — single-valued predicates supersede on
+  change; multi-valued ones accumulate (both "uses Postgres" and "uses Redis"
+  stay current). Configurable per predicate.
+- **Embedding-model guard** — the store records which embedder built it; a
+  silent model swap is caught (warn/error) instead of corrupting retrieval.
+  `reembed()` rebuilds vectors after an intentional change.
+- **Credential policy** — extracted secrets are redacted-and-not-embedded by
+  default (`CREDENTIAL_POLICY`); GDPR deletes via `forget_fact` /
+  `forget_matching` / `forget`.
 - **Ingestion dedup** — re-uploading the same document doesn't bloat the store.
 - **Escape hatch** — retrieval is exposed as a tool (`dmem_recall`) so the model
   can pull more context mid-conversation instead of betting on a one-shot

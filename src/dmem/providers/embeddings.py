@@ -37,6 +37,11 @@ class EmbeddingProvider(Protocol):
     def embed_one(self, text: str) -> list[float]:
         ...
 
+    def signature(self) -> str:
+        """Stable identity of this embedder (model + dim). Vectors are only
+        comparable across identical signatures."""
+        ...
+
 
 def _normalize(vec: list[float]) -> list[float]:
     norm = math.sqrt(sum(v * v for v in vec))
@@ -77,6 +82,9 @@ class HashingEmbeddingProvider:
 
     def embed_one(self, text: str) -> list[float]:
         return self._embed_text(text)
+
+    def signature(self) -> str:
+        return f"offline-hashing:{self.dim}"
 
 
 class HTTPEmbeddingProvider:
@@ -128,6 +136,12 @@ class HTTPEmbeddingProvider:
 
     def embed_one(self, text: str) -> list[float]:
         return self.embed([text])[0]
+
+    def signature(self) -> str:
+        # dim may be 0 until the first call discovers it; include host to
+        # disambiguate same model name on different endpoints.
+        host = self._url.rsplit("/", 1)[0]
+        return f"{self.model}@{host}:{self.dim or '?'}"
 
 
 def build_embedding_provider(cfg: EmbeddingConfig) -> EmbeddingProvider:

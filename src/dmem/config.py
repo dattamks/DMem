@@ -57,6 +57,52 @@ class GraphKind(str, Enum):
             ) from e
 
 
+class EmbeddingMismatchPolicy(str, Enum):
+    """What to do when the store was built with a different embedding model.
+
+    Vectors from different embedding models are not comparable, so a silent
+    model swap corrupts retrieval. Default is to warn loudly."""
+
+    WARN = "warn"     # log a warning, keep going (default)
+    ERROR = "error"   # refuse to start until re-embedded or reverted
+    IGNORE = "ignore"  # say nothing (not recommended)
+
+    @classmethod
+    def coerce(cls, value: Optional[str]) -> "EmbeddingMismatchPolicy":
+        if not value:
+            return cls.WARN
+        try:
+            return cls(value.strip().lower())
+        except ValueError as e:
+            raise ConfigError(
+                f"EMBEDDING_MISMATCH_POLICY={value!r} is invalid. "
+                "Choose warn|error|ignore.") from e
+
+
+class CredentialPolicy(str, Enum):
+    """How to handle facts extracted as credentials (secret-bearing).
+
+    - redact (default): store the fact but mask the secret value and never embed
+      it — the system knows a credential was mentioned without retaining it.
+    - drop: do not store credential facts at all.
+    - store: store the raw value (still withheld from handoffs). Opt-in only."""
+
+    REDACT = "redact"
+    DROP = "drop"
+    STORE = "store"
+
+    @classmethod
+    def coerce(cls, value: Optional[str]) -> "CredentialPolicy":
+        if not value:
+            return cls.REDACT
+        try:
+            return cls(value.strip().lower())
+        except ValueError as e:
+            raise ConfigError(
+                f"CREDENTIAL_POLICY={value!r} is invalid. "
+                "Choose redact|drop|store.") from e
+
+
 def _get(env: dict[str, str], *keys: str) -> Optional[str]:
     for k in keys:
         v = env.get(k)
@@ -177,6 +223,10 @@ class Config:
 
     default_namespace: str = "default"
 
+    # Production-safety policies.
+    embedding_mismatch_policy: EmbeddingMismatchPolicy = EmbeddingMismatchPolicy.WARN
+    credential_policy: CredentialPolicy = CredentialPolicy.REDACT
+
     # Per-predicate cardinality overrides (extends the built-in defaults).
     # Controls contradiction handling: SINGLE supersedes on change, MULTI
     # accumulates. Populated from MULTI_VALUED_PREDICATES / SINGLE_VALUED_PREDICATES.
@@ -224,6 +274,9 @@ class Config:
             not in ("0", "false", "no"),
             rerank_model=_get(env, "RERANK_MODEL"),
             default_namespace=_get(env, "DMEM_NAMESPACE") or "default",
+            embedding_mismatch_policy=EmbeddingMismatchPolicy.coerce(
+                env.get("EMBEDDING_MISMATCH_POLICY")),
+            credential_policy=CredentialPolicy.coerce(env.get("CREDENTIAL_POLICY")),
             predicate_cardinality_overrides=_parse_cardinality_overrides(env),
         )
         cfg.validate()

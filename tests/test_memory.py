@@ -136,11 +136,57 @@ def test_multi_valued_not_flagged_as_conflict(engine):
     assert h.conflicts == [], "concurrent multi-valued facts are not conflicts"
 
 
-def test_credentials_withheld_from_handoff(engine):
+def test_credentials_redacted_by_default(engine):
+    # default policy is REDACT: the secret value is never stored or embedded
     engine.ingest_message("I use api key sk-secret-value-123.")
+    for f in engine.store.iter_facts():
+        assert "sk-secret-value-123" not in f.object
+        if f.fact_type.value == "credential":
+            assert f.object == "[REDACTED]"
+            assert f.embedding is None  # not embedded -> unrecoverable via vectors
     h = engine.handoff("what does the user use?")
     assert "sk-secret-value-123" not in h.text
-    assert any("credential" in n.lower() for n in h.notes)
+
+
+def test_credential_policy_store_keeps_but_withholds(tmp_path):
+    import warnings
+    from dmem import Config, DMemEngine, Tier
+    from dmem.config import CredentialPolicy, EmbeddingConfig
+    cfg = Config(tier=Tier.SQLITE, sqlite_path=str(tmp_path / "c.db"),
+                 embedding=EmbeddingConfig(),
+                 credential_policy=CredentialPolicy.STORE)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        eng = DMemEngine(cfg)
+    try:
+        eng.ingest_message("I use api key sk-secret-value-123.")
+        # stored raw...
+        assert any("sk-secret-value-123" in f.object for f in eng.store.iter_facts())
+        # ...but still withheld from the handoff blob
+        h = eng.handoff("what does the user use?")
+        assert "sk-secret-value-123" not in h.text
+        assert any("credential" in n.lower() for n in h.notes)
+    finally:
+        eng.close()
+
+
+def test_credential_policy_drop(tmp_path):
+    import warnings
+    from dmem import Config, DMemEngine, Tier
+    from dmem.config import CredentialPolicy, EmbeddingConfig
+    cfg = Config(tier=Tier.SQLITE, sqlite_path=str(tmp_path / "d.db"),
+                 embedding=EmbeddingConfig(),
+                 credential_policy=CredentialPolicy.DROP)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        eng = DMemEngine(cfg)
+    try:
+        eng.ingest_message("I use api key sk-secret-value-123.")
+        creds = [f for f in eng.store.iter_facts()
+                 if f.fact_type.value == "credential"]
+        assert creds == []  # nothing stored at all
+    finally:
+        eng.close()
 
 
 def test_forget_deletes_namespace(engine):

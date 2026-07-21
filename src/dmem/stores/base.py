@@ -97,6 +97,20 @@ class MemoryStore(Protocol):
         Pro/consolidated tiers do real multi-hop traversal. SQLite approximates
         with a one-hop subject/object co-occurrence lookup."""
 
+    # -- store metadata (embedding signature, schema version, ...) ---------
+    def get_meta(self, key: str) -> Optional[str]:
+        """Read a store-level metadata value, or None if unset."""
+
+    def set_meta(self, key: str, value: str) -> None:
+        """Write a store-level metadata value."""
+
+    # -- bulk iteration (for re-embedding / migration) ---------------------
+    def iter_facts(self):
+        """Yield every stored Fact (all namespaces, current and closed)."""
+
+    def iter_chunks(self):
+        """Yield every stored Chunk (all namespaces)."""
+
     # -- admin -------------------------------------------------------------
     def delete_namespace(self, namespace: str) -> int:
         """Hard-delete everything for a namespace (GDPR / right-to-be-forgotten).

@@ -105,6 +105,11 @@ class SQLiteStore:
                 CREATE INDEX IF NOT EXISTS idx_chunks_ns ON chunks(namespace);
                 CREATE INDEX IF NOT EXISTS idx_chunks_hash
                     ON chunks(namespace, content_hash);
+
+                CREATE TABLE IF NOT EXISTS meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                );
                 """
             )
             self._conn.commit()
@@ -355,6 +360,40 @@ class SQLiteStore:
                 if len(hits) >= limit:
                     break
         return hits
+
+    # -- meta --------------------------------------------------------------
+    def get_meta(self, key: str) -> Optional[str]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+                (key, value))
+            self._conn.commit()
+
+    # -- bulk iteration ----------------------------------------------------
+    def iter_facts(self):
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM facts").fetchall()
+        for r in rows:
+            yield self._row_to_fact(r)
+
+    def iter_chunks(self):
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM chunks").fetchall()
+        for r in rows:
+            prov = json.loads(r["provenance"]) if r["provenance"] else None
+            yield Chunk(
+                text=r["text"], document_id=r["document_id"], concept=r["concept"],
+                section=r["section"], ordinal=r["ordinal"], id=r["id"],
+                namespace=r["namespace"],
+                embedding=json.loads(r["embedding"]) if r["embedding"] else None,
+                metadata=json.loads(r["metadata"]) if r["metadata"] else {},
+                provenance=Provenance.from_dict(prov) if prov else None)
 
     # -- admin -------------------------------------------------------------
     def delete_namespace(self, namespace: str) -> int:

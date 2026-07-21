@@ -59,6 +59,9 @@ class PgVectorStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS dmem_chunks_hnsw ON dmem_chunks "
                 "USING hnsw (embedding vector_cosine_ops)")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS dmem_meta "
+                "(key TEXT PRIMARY KEY, value TEXT)")
         except Exception as e:  # pragma: no cover - server dependent
             raise StoreError(f"pgvector initialize failed: {e}") from e
 
@@ -125,6 +128,31 @@ class PgVectorStore:
 
     def graph_neighbors(self, namespace, seeds, max_hops=1, limit=20) -> list[GraphHit]:
         return []  # documents have no graph edges; facts handle this
+
+    # -- meta --------------------------------------------------------------
+    def initialize_meta(self) -> None:
+        self._connect().execute(
+            "CREATE TABLE IF NOT EXISTS dmem_meta (key TEXT PRIMARY KEY, value TEXT)")
+
+    def get_meta(self, key: str):
+        conn = self._connect()
+        row = conn.execute("SELECT value FROM dmem_meta WHERE key=%s",
+                           (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._connect().execute(
+            "INSERT INTO dmem_meta (key, value) VALUES (%s,%s) "
+            "ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value", (key, value))
+
+    def iter_chunks(self):
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT id, namespace, document_id, concept, section, ordinal, text "
+            "FROM dmem_chunks").fetchall()
+        for r in rows:
+            yield Chunk(text=r[6], document_id=r[2], concept=r[3], section=r[4],
+                        ordinal=r[5], id=r[0], namespace=r[1])
 
     def delete_namespace(self, namespace: str) -> int:
         conn = self._connect()

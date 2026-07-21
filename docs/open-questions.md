@@ -37,16 +37,26 @@ need a call from product/eng, ideally informed by real usage.
   (including its closed history); `forget_matching(ns, subject=…/predicate=…/
   object=…)` erases everything about an entity. These hard-delete and win over
   the preserve-history default; `forget(ns)` still wipes a whole namespace.
+- ✅ **Embedding-model-change guard.** The store stamps the embedding signature
+  (model + dim); on open, a mismatch is caught. `EMBEDDING_MISMATCH_POLICY` =
+  warn (default) / error / ignore. `engine.reembed()` rebuilds all vectors with
+  the current model and updates the signature. A `schema_version` is also
+  stamped for future migrations.
+- ✅ **Credential storage policy.** `CREDENTIAL_POLICY` = redact (default: store
+  the fact, mask the value, never embed it) / drop (don't store) / store (keep
+  raw, still withheld from handoffs). Default no longer retains secret values.
 
 ## Open — need a decision
 
 ### Data / privacy / legal
-- ❓ **Credential fact type at all.** We *tag and withhold* credentials, but
-  should DMem store them at all? Options: (a) store tagged + encrypted at rest,
-  (b) redact-and-drop, (c) store but never embed. Currently stored tagged and
-  embedded — **revisit before any production use.** No encryption-at-rest yet.
+- ❓ **Credential encryption at rest.** Default is now redact-and-don't-embed
+  (resolved above), but the `store` policy keeps raw values in plaintext and
+  there's no encryption-at-rest option. Add one before anyone uses `store` in
+  production. Also: credential *detection* is a coarse keyword match — it will
+  miss secrets that don't say "key/token/password".
 - ❓ **PII handling / redaction policy.** No PII detection on ingest. Should the
-  extractor redact or flag emails/phone/SSNs?
+  extractor redact or flag emails/phone/SSNs? (Same detection-quality caveat as
+  credentials.)
 - ❓ **Encryption at rest** for the SQLite file and embeddings — not implemented.
 
 ### Retrieval quality (all deferred to post-benchmark per spec)
@@ -74,12 +84,10 @@ need a call from product/eng, ideally informed by real usage.
   lock. Pro tier writes facts (graph) and chunks (pgvector) in separate
   transactions — a partial failure can leave them inconsistent. No 2-phase /
   outbox yet.
-- ❓ **Schema migration / versioning.** No migration story for the SQLite schema
-  or the graph model across DMem upgrades. OSS stores live for years — needs an
-  export/import format and a migration runner before 1.0.
-- ❓ **Embedding-model change.** Vectors from one embedding model are
-  incompatible with another. Switching `EMBEDDING_MODEL` silently degrades
-  retrieval. Need to store the model id per vector and warn / re-embed on change.
+- ❓ **Schema migration / versioning.** A `schema_version` is now stamped in the
+  store, but there is no migration *runner* yet — nothing consumes the version to
+  transform an old store to a new layout. Still needs an export/import format and
+  a migration path before 1.0.
 
 ### Product / packaging
 - ❓ **Public name.** Repo is `dmem`; confirm that's the shipping name.

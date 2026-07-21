@@ -261,6 +261,35 @@ class GraphStore:
         return [GraphHit(id=r["f"]["id"], text=_fact_text(r["f"]), hops=1,
                          payload=dict(r["f"])) for r in rows]
 
+    # -- meta --------------------------------------------------------------
+    def get_meta(self, key: str) -> Optional[str]:
+        rows = self._d.run("MATCH (m:DMemMeta {key:$k}) RETURN m.value AS v",
+                           k=key)
+        try:
+            return rows[0]["v"] if rows else None
+        except Exception:  # pragma: no cover
+            return None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._d.run(
+            "MERGE (m:DMemMeta {key:$k}) SET m.value=$v", k=key, v=value)
+
+    def iter_facts(self):
+        rows = self._d.run("MATCH (f:Fact) RETURN f")
+        for r in rows:
+            yield _row_to_fact(r)
+
+    def iter_chunks(self):
+        if not self._hold_chunks:
+            return
+        rows = self._d.run("MATCH (c:Chunk) RETURN c")
+        for r in rows:
+            n = r["c"]
+            yield Chunk(text=n["text"], document_id=n["document_id"],
+                        concept=n.get("concept"), section=n.get("section"),
+                        ordinal=n.get("ordinal", 0), id=n["id"],
+                        namespace=n["namespace"], embedding=n.get("embedding"))
+
     def delete_namespace(self, namespace: str) -> int:
         rows = self._d.run(
             "MATCH (n {namespace:$ns}) DETACH DELETE n RETURN count(n) AS c",

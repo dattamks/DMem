@@ -93,3 +93,16 @@ one-hop co-occurrence lookup so the fusion code path is identical everywhere.
 
 Every stored item carries a `namespace`. Pass `namespace=` to isolate users /
 tenants. `forget(namespace)` hard-deletes everything for one tenant.
+
+## Production-safety guards
+
+- **Embedding-model change.** The store stamps the embedder's signature
+  (`model + dim`). On open, the engine compares it and, per
+  `EMBEDDING_MISMATCH_POLICY` (warn/error/ignore), flags a mismatch — because
+  vectors from different models aren't comparable. `engine.reembed()` rebuilds
+  every fact/chunk vector with the current model and updates the signature. A
+  `schema_version` is stamped alongside for future migrations.
+- **Credentials.** Facts extracted as `credential` are handled per
+  `CREDENTIAL_POLICY`: `redact` (default — store the fact, mask the value to
+  `[REDACTED]`, never embed it), `drop` (don't store), or `store` (keep raw).
+  All policies still withhold credentials from the handoff text.

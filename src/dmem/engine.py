@@ -36,9 +36,16 @@ from .providers.reranker import build_reranker
 from .retrieval.handoff import build_handoff
 from .retrieval.hybrid import HybridRetriever
 from .retrieval.scoring import detect_conflicts, reciprocal_rank_fusion
+from .config import CredentialPolicy, EmbeddingMismatchPolicy
+from .errors import ConfigError
 from .stores.factory import build_store
-from .types import (Cardinality, Chunk, Episode, Fact, Handoff, Provenance,
-                    RetrievalResult, predicate_cardinality)
+from .types import (Cardinality, Chunk, Episode, Fact, FactType, Handoff,
+                    Provenance, RetrievalResult, predicate_cardinality)
+
+_META_EMBED_SIG = "embedding_signature"
+_META_SCHEMA_VERSION = "schema_version"
+SCHEMA_VERSION = "1"
+_CRED_MASK = "[REDACTED]"
 
 
 class DMemEngine:
@@ -65,6 +72,58 @@ class DMemEngine:
             top_k=cfg.retrieval_top_k, rerank_top_k=cfg.rerank_top_k,
             recency_half_life_days=cfg.recency_half_life_days)
 
+        self._check_store_compatibility()
+
+    # ------------------------------------------------------------------ #
+    # Store compatibility (embedding-model guard + schema stamp)
+    # ------------------------------------------------------------------ #
+    def _check_store_compatibility(self) -> None:
+        """Guard against a silent embedding-model swap.
+
+        Vectors from different embedding models are not comparable, so reusing a
+        store built with a different model silently corrupts retrieval. We stamp
+        the embedding signature on first use and compare on every open."""
+        try:
+            self.store.set_meta(_META_SCHEMA_VERSION, SCHEMA_VERSION)
+            current = self.embedder.signature()
+            stored = self.store.get_meta(_META_EMBED_SIG)
+        except Exception:  # store without meta support: skip the guard
+            return
+
+        if stored is None:
+            self.store.set_meta(_META_EMBED_SIG, current)
+            return
+        if stored == current:
+            return
+
+        msg = (f"DMem embedding model changed: store was built with "
+               f"{stored!r} but the configured embedder is {current!r}. "
+               f"Existing vectors are not comparable — retrieval will be wrong. "
+               f"Run engine.reembed() to rebuild vectors, or revert the model.")
+        policy = self.config.embedding_mismatch_policy
+        if policy is EmbeddingMismatchPolicy.ERROR:
+            raise ConfigError(msg)
+        if policy is EmbeddingMismatchPolicy.WARN:
+            warnings.warn(msg, stacklevel=2)
+        # IGNORE: say nothing
+
+    def reembed(self) -> int:
+        """Recompute embeddings for every stored fact and chunk with the current
+        embedder, then update the stored signature. Returns items re-embedded.
+
+        Use after intentionally changing the embedding model."""
+        count = 0
+        for fact in list(self.store.iter_facts()):
+            fact.embedding = self.embedder.embed_one(fact.statement)
+            self.store.upsert_fact(fact)
+            count += 1
+        for chunk in list(self.store.iter_chunks()):
+            chunk.embedding = self.embedder.embed_one(chunk.text)
+            self.store.upsert_chunks([chunk])
+            count += 1
+        self.store.set_meta(_META_EMBED_SIG, self.embedder.signature())
+        return count
+
     # ------------------------------------------------------------------ #
     # Ingestion
     # ------------------------------------------------------------------ #
@@ -87,8 +146,22 @@ class DMemEngine:
                         object=ex.object, fact_type=ex.fact_type,
                         provenance=prov, namespace=ns, confidence=ex.confidence,
                         valid_from=now, recorded_at=now)
+
+            embed = True
+            if fact.fact_type is FactType.CREDENTIAL:
+                policy = self.config.credential_policy
+                if policy is CredentialPolicy.DROP:
+                    continue  # never stored
+                if policy is CredentialPolicy.REDACT:
+                    # keep the fact that a credential exists; drop the secret and
+                    # never embed it (so the value can't be recovered via search)
+                    fact.object = _CRED_MASK
+                    embed = False
+                # STORE: keep as-is (still withheld from handoffs downstream)
+
             supersede = self._should_supersede(ex)
-            saved = self._store_fact_with_conflict_handling(fact, now, supersede)
+            saved = self._store_fact_with_conflict_handling(fact, now, supersede,
+                                                            embed=embed)
             if saved is not None:
                 stored.append(saved)
         return stored
@@ -109,7 +182,8 @@ class DMemEngine:
         return card is Cardinality.SINGLE
 
     def _store_fact_with_conflict_handling(
-        self, fact: Fact, now: float, supersede: bool = True) -> Optional[Fact]:
+        self, fact: Fact, now: float, supersede: bool = True,
+        embed: bool = True) -> Optional[Fact]:
         # 1) Exact dedup: identical subject+predicate+object already current.
         existing = self.store.find_fact_by_dedup_key(fact.namespace,
                                                      fact.dedup_key())
@@ -130,7 +204,10 @@ class DMemEngine:
             if superseded_id:
                 fact.supersedes = superseded_id
 
-        fact.embedding = self.embedder.embed_one(fact.statement)
+        # Redacted credentials are intentionally not embedded (embed=False), so
+        # the secret can't be recovered via vector search.
+        if embed:
+            fact.embedding = self.embedder.embed_one(fact.statement)
         self.store.upsert_fact(fact)
         return fact
 
