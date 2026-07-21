@@ -72,6 +72,9 @@ See [`.env.example`](.env.example) for all config.
 - **MCP server** — `dmem-mcp` (stdio). Exposes `dmem_recall`, `dmem_remember`,
   `dmem_handoff`, `dmem_ingest_document`, `dmem_forget` to any MCP client
   (Claude Desktop, Cursor, …). See [`docs/mcp.md`](docs/mcp.md).
+- **OpenAI-compatible proxy** — point your app's base URL at DMem and get memory
+  injection + history compaction transparently, no code change:
+  `uvicorn dmem.adapters.proxy:app`. See [`docs/proxy.md`](docs/proxy.md).
 - **IDE extension** — scaffold in [`extensions/vscode/`](extensions/vscode);
   wraps the MCP server. (Work in progress.)
 

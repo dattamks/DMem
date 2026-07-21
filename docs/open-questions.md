@@ -6,9 +6,15 @@ need a call from product/eng, ideally informed by real usage.
 
 ## Resolved in this build (decisions to review)
 
-- ✅ **Scope of the "plugin".** Only the memory/context layer (spec §8) is built.
-  Proxy/auth/billing are out of scope. A thin OpenAI-compatible proxy adapter
-  can be added later without touching the core.
+- ✅ **Scope of the "plugin".** The memory/context layer (spec §8) plus the thin
+  OpenAI-compatible proxy adapter (`dmem.adapters.proxy`) are built. Auth/billing
+  remain out of scope.
+- ✅ **Transparent proxy adapter.** `dmem.adapters.proxy` sits in front of any
+  OpenAI-compatible `/v1/chat/completions`: injects relevant memory / a
+  model-switch handoff, compacts long histories before forwarding, and persists
+  facts from each exchange — host app only changes its base URL. Pure sync core
+  (injectable forwarder) + a framework-free ASGI app. Streaming is passed through
+  un-augmented in v1.
 - ✅ **Retrieval ordering** (spec called this open): `fuse → recency → rerank →
   cut`. Recency applies at candidate selection; rerank re-orders within the
   recency-aware pool; scores are blended, not overwritten.
