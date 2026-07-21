@@ -78,12 +78,22 @@ proxy = MemoryChatProxy(DMemEngine(), ProxyConfig.from_env())
 response = proxy.complete(openai_request_dict, namespace="alice")
 ```
 
+## Streaming
+
+Streaming (`stream: true`) is fully supported: memory is injected on the request
+side and history compaction still applies, the upstream SSE stream is passed
+through to the client **byte-for-byte** (so it looks like a normal OpenAI
+stream), and the assembled assistant reply is **teed into memory** once the
+stream completes. The response is `text/event-stream`. The blocking generator is
+driven from a worker thread so it doesn't stall the ASGI event loop.
+
 ## Limitations (v1)
 
-- **Streaming** (`stream: true`) is passed through **un-augmented** — memory
-  injection/compaction apply to non-streaming requests only for now.
 - Compaction summarization uses your configured LLM if set, else an extractive
   fallback (lower fidelity).
 - The proxy is synchronous per request (run behind an ASGI server that gives you
   concurrency); heavy deployments may want a native-async engine (tracked in
   open questions).
+- Non-`content` streamed deltas (tool-call fragments, function args) are passed
+  through to the client but not reconstructed into memory — only assistant
+  `content` text is teed in.

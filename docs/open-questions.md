@@ -13,8 +13,13 @@ need a call from product/eng, ideally informed by real usage.
   OpenAI-compatible `/v1/chat/completions`: injects relevant memory / a
   model-switch handoff, compacts long histories before forwarding, and persists
   facts from each exchange — host app only changes its base URL. Pure sync core
-  (injectable forwarder) + a framework-free ASGI app. Streaming is passed through
-  un-augmented in v1.
+  (injectable forwarder) + a framework-free ASGI app.
+- ✅ **Proxy streaming.** `stream: true` is supported: request-side memory
+  injection + compaction, byte-for-byte SSE passthrough to the client, and the
+  assembled assistant reply teed into memory when the stream ends (driven from a
+  worker thread so the ASGI loop isn't blocked). Only assistant `content` deltas
+  are reconstructed into memory — tool-call/function-arg deltas pass through but
+  aren't teed in.
 - ✅ **Retrieval ordering** (spec called this open): `fuse → recency → rerank →
   cut`. Recency applies at candidate selection; rerank re-orders within the
   recency-aware pool; scores are blended, not overwritten.

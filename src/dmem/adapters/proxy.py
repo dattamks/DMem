@@ -80,10 +80,12 @@ class MemoryChatProxy:
     """Pure, synchronous orchestration around an OpenAI chat request."""
 
     def __init__(self, engine: DMemEngine, config: Optional[ProxyConfig] = None,
-                 forward_fn: Optional[Callable[[dict], dict]] = None):
+                 forward_fn: Optional[Callable[[dict], dict]] = None,
+                 stream_forward_fn: Optional[Callable[[dict], Any]] = None):
         self.engine = engine
         self.config = config or ProxyConfig()
-        self._forward_fn = forward_fn  # injectable for tests; else httpx
+        self._forward_fn = forward_fn              # injectable for tests; else httpx
+        self._stream_forward_fn = stream_forward_fn  # yields raw SSE byte chunks
 
     # -- public orchestration ---------------------------------------------
     def complete(self, payload: dict, namespace: str) -> dict:
@@ -163,17 +165,78 @@ class MemoryChatProxy:
         resp.raise_for_status()
         return resp.json()
 
+    # -- streaming orchestration ------------------------------------------
+    def complete_stream(self, payload: dict, namespace: str):
+        """Augment → stream-forward → tee assembled reply into memory.
+
+        A generator yielding the upstream's raw SSE byte chunks **unchanged**, so
+        the client sees a normal OpenAI stream. Memory is injected on the request
+        side and the assembled assistant reply is ingested once the stream ends.
+        """
+        augmented, _ctx = self.augment_request(payload, namespace)
+        augmented = dict(augmented)
+        augmented["stream"] = True
+        try:
+            self._record_user_and_model(payload, namespace)
+        except Exception:
+            pass  # memory writes must never break the proxied stream
+
+        acc = _SSEAccumulator()
+        for chunk in self.forward_stream(augmented):
+            raw = chunk if isinstance(chunk, (bytes, bytearray)) else str(chunk).encode()
+            yield raw
+            try:
+                acc.feed(raw)
+            except Exception:
+                pass
+        reply = acc.text
+        if reply.strip():
+            try:
+                self.engine.ingest_message(reply, namespace=namespace,
+                                           role="assistant", speaker="assistant")
+            except Exception:
+                pass
+
+    def forward_stream(self, payload: dict):
+        """Yield raw SSE byte chunks from the upstream (or the injected fn)."""
+        if self._stream_forward_fn is not None:
+            yield from self._stream_forward_fn(payload)
+            return
+        cfg = self.config
+        if not cfg.upstream_base_url:
+            raise RuntimeError("No upstream configured: set PROXY_UPSTREAM_URL "
+                               "(or pass stream_forward_fn).")
+        try:
+            import httpx
+        except ImportError as e:  # pragma: no cover
+            raise RuntimeError("The proxy forwarder needs the 'http' extra: "
+                               "pip install dmem[http]") from e
+        url = cfg.upstream_base_url.rstrip("/")
+        if not url.endswith("/chat/completions"):
+            url += "/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if cfg.upstream_api_key:
+            headers["Authorization"] = f"Bearer {cfg.upstream_api_key}"
+        with httpx.stream("POST", url, headers=headers, json=payload,
+                          timeout=300.0) as resp:  # pragma: no cover - network
+            resp.raise_for_status()
+            for chunk in resp.iter_bytes():
+                yield chunk
+
     # -- step 3: record ----------------------------------------------------
     def record_exchange(self, payload: dict, response: dict, namespace: str) -> None:
         # persist the newest user turn and the assistant reply as memory
-        last_user = _last_user_text(payload.get("messages", []))
-        if last_user:
-            self.engine.ingest_message(last_user, namespace=namespace, role="user")
+        self._record_user_and_model(payload, namespace)
         for choice in response.get("choices", []):
             content = _content_str(choice.get("message", {}))
             if content:
                 self.engine.ingest_message(content, namespace=namespace,
                                            role="assistant", speaker="assistant")
+
+    def _record_user_and_model(self, payload: dict, namespace: str) -> None:
+        last_user = _last_user_text(payload.get("messages", []))
+        if last_user:
+            self.engine.ingest_message(last_user, namespace=namespace, role="user")
         model = payload.get("model")
         if model:
             self._set_last_model(namespace, model)
@@ -216,6 +279,45 @@ class MemoryChatProxy:
             self.engine.store.set_meta(_META_LAST_MODEL + namespace, model)
         except Exception:
             pass
+
+
+class _SSEAccumulator:
+    """Reassembles assistant text from a passthrough OpenAI SSE stream.
+
+    Buffers across chunk boundaries (chunks don't align to SSE events) and pulls
+    ``choices[].delta.content`` out of each ``data: {...}`` event. Ignores the
+    terminal ``data: [DONE]`` and any unparseable event."""
+
+    def __init__(self):
+        self._buf = ""
+        self._parts: list[str] = []
+
+    def feed(self, chunk: bytes) -> None:
+        self._buf += chunk.decode("utf-8", "replace")
+        while "\n\n" in self._buf:
+            event, self._buf = self._buf.split("\n\n", 1)
+            self._handle(event)
+
+    def _handle(self, event: str) -> None:
+        for line in event.splitlines():
+            line = line.strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                obj = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            for ch in obj.get("choices", []):
+                content = (ch.get("delta") or {}).get("content")
+                if content:
+                    self._parts.append(content)
+
+    @property
+    def text(self) -> str:
+        return "".join(self._parts)
 
 
 def _last_user_text(messages: list[dict]) -> str:
@@ -277,12 +379,7 @@ def create_app(engine: Optional[DMemEngine] = None,
                      or default_ns)
 
         if payload.get("stream"):
-            # streaming is passed through un-augmented in v1
-            try:
-                result = await asyncio.to_thread(proxy.forward, payload)
-                await _send_json(send, 200, result)
-            except Exception as e:
-                await _send_json(send, 502, {"error": str(e)})
+            await _stream_response(send, proxy.complete_stream(payload, namespace))
             return
 
         try:
@@ -292,6 +389,42 @@ def create_app(engine: Optional[DMemEngine] = None,
             await _send_json(send, 502, {"error": str(e)})
 
     return app
+
+
+async def _stream_response(send, sync_gen) -> None:
+    """Drive a blocking SSE generator from ASGI without blocking the event loop.
+
+    The sync generator runs in a worker thread and pushes chunks onto an async
+    queue that the handler drains, sending each as a response-body frame."""
+    import asyncio
+
+    await send({"type": "http.response.start", "status": 200,
+                "headers": [[b"content-type", b"text/event-stream"],
+                            [b"cache-control", b"no-cache"]]})
+    loop = asyncio.get_event_loop()
+    queue: "asyncio.Queue" = asyncio.Queue()
+    done = object()
+
+    def produce():
+        try:
+            for chunk in sync_gen:
+                loop.call_soon_threadsafe(queue.put_nowait, chunk)
+        except Exception as e:  # surface upstream errors as an SSE error event
+            msg = f"data: {json.dumps({'error': str(e)})}\n\n".encode()
+            loop.call_soon_threadsafe(queue.put_nowait, msg)
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, done)
+
+    fut = loop.run_in_executor(None, produce)
+    while True:
+        item = await queue.get()
+        if item is done:
+            break
+        body = item if isinstance(item, (bytes, bytearray)) else str(item).encode()
+        await send({"type": "http.response.body", "body": body,
+                    "more_body": True})
+    await send({"type": "http.response.body", "body": b"", "more_body": False})
+    await fut
 
 
 async def _read_body(receive) -> bytes:
