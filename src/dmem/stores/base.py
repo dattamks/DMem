@@ -59,6 +59,18 @@ class MemoryStore(Protocol):
     def get_fact(self, fact_id: str) -> Optional[Fact]:
         ...
 
+    def delete_fact(self, fact_id: str) -> bool:
+        """Hard-delete a single fact by id. Returns True if a row was removed."""
+
+    def delete_facts(
+        self, namespace: str, *, subject: Optional[str] = None,
+        predicate: Optional[str] = None, object: Optional[str] = None,
+    ) -> int:
+        """Hard-delete all facts (current and closed) matching the filters.
+
+        Right-to-be-forgotten at fact granularity, as distinct from the
+        preserve-history close. At least one filter must be non-None."""
+
     # -- documents ---------------------------------------------------------
     def upsert_chunks(self, chunks: Sequence[Chunk]) -> None: ...
     def chunk_exists(self, namespace: str, content_hash: str) -> bool: ...

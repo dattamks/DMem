@@ -23,23 +23,64 @@ def test_dedup_skips_identical_fact(engine):
     assert again == []  # identical fact deduped
 
 
-def test_contradiction_supersedes_not_deletes(engine):
-    engine.ingest_message("I use Postgres.")
+def test_single_valued_contradiction_supersedes_not_deletes(engine):
+    # works_at is single-valued: a new employer retires the old one.
+    engine.ingest_message("I work at Google.")
     time.sleep(0.01)
-    updated = engine.ingest_message("I use MySQL.")
+    updated = engine.ingest_message("I work at Meta.")
     assert updated, "new value should be stored"
 
-    # old fact retained but closed; new one current
-    current = engine.store.find_current_facts("default", "user", "uses")
+    current = engine.store.find_current_facts("default", "user", "works_at")
     current_objs = {f.object.lower() for f in current}
-    assert "mysql" in current_objs
-    assert "postgres" not in current_objs  # postgres closed, not current
+    assert "meta" in current_objs
+    assert "google" not in current_objs  # google closed, not current
 
     new_fact = updated[0]
     assert new_fact.supersedes is not None
     old = engine.store.get_fact(new_fact.supersedes)
     assert old is not None
     assert old.valid_to is not None  # closed window, still present
+
+
+def test_multi_valued_predicate_accumulates(engine):
+    # "uses" is multi-valued: both remain current, not a contradiction.
+    engine.ingest_message("I use Postgres.")
+    time.sleep(0.01)
+    engine.ingest_message("I use Redis.")
+    current = engine.store.find_current_facts("default", "user", "uses")
+    objs = {f.object.lower() for f in current}
+    assert "postgres" in objs and "redis" in objs
+    for f in current:
+        assert f.valid_to is None  # nothing closed
+
+
+def test_multi_valued_exact_duplicate_still_deduped(engine):
+    engine.ingest_message("I use Postgres.")
+    again = engine.ingest_message("I use Postgres.")
+    assert again == []  # identical multi-valued fact still deduped
+
+
+def test_cardinality_override_from_config(tmp_path):
+    # Force "uses" to be single-valued via config override.
+    import warnings
+    from dmem import Config, DMemEngine, Tier
+    from dmem.config import EmbeddingConfig
+    from dmem.types import Cardinality
+    cfg = Config(tier=Tier.SQLITE, sqlite_path=str(tmp_path / "o.db"),
+                 embedding=EmbeddingConfig(),
+                 predicate_cardinality_overrides={"uses": Cardinality.SINGLE})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        eng = DMemEngine(cfg)
+    try:
+        eng.ingest_message("I use Postgres.")
+        time.sleep(0.01)
+        eng.ingest_message("I use MySQL.")
+        current = eng.store.find_current_facts("default", "user", "uses")
+        objs = {f.object.lower() for f in current}
+        assert objs == {"mysql"}  # override made it supersede
+    finally:
+        eng.close()
 
 
 def test_retrieve_finds_relevant_fact(engine):
@@ -76,14 +117,23 @@ def test_low_confidence_triggers_fallback_flag(engine):
 
 
 def test_conflict_surfaced_in_handoff(engine):
-    engine.ingest_message("I use Postgres.")
+    # single-valued predicate: the change genuinely supersedes -> surfaced
+    engine.ingest_message("I work at Google.")
     time.sleep(0.01)
-    engine.ingest_message("I use MySQL.")
-    h = engine.handoff("what database does the user use?")
-    # both values available; conflict surfaced rather than silently collapsed
+    engine.ingest_message("I work at Meta.")
+    h = engine.handoff("where does the user work?")
     assert h.conflicts, "changed fact should be surfaced"
     joined = " ".join(str(c) for c in h.conflicts).lower()
-    assert "postgres" in joined and "mysql" in joined
+    assert "google" in joined and "meta" in joined
+
+
+def test_multi_valued_not_flagged_as_conflict(engine):
+    # co-existing multi-valued facts are NOT a conflict
+    engine.ingest_message("I use Postgres.")
+    time.sleep(0.01)
+    engine.ingest_message("I use Redis.")
+    h = engine.handoff("what does the user use?")
+    assert h.conflicts == [], "concurrent multi-valued facts are not conflicts"
 
 
 def test_credentials_withheld_from_handoff(engine):
@@ -100,6 +150,39 @@ def test_forget_deletes_namespace(engine):
     assert n >= 1
     assert engine.retrieve("preferences", namespace="alice") == []
     assert engine.retrieve("preferences", namespace="bob") != [] or True
+
+
+def test_forget_single_fact_hard_delete(engine):
+    stored = engine.ingest_message("My name is Ada.")
+    fact_id = stored[0].id
+    assert engine.forget_fact(fact_id) is True
+    assert engine.store.get_fact(fact_id) is None  # gone, not just closed
+    assert engine.forget_fact(fact_id) is False    # already gone
+
+
+def test_forget_matching_erases_entity(engine):
+    engine.ingest_message("I work at Google.")
+    engine.ingest_message("I prefer Rust.")
+    engine.ingest_message("My name is Ada.")
+    # erase everything about subject "user"
+    n = engine.forget_matching("default", subject="user")
+    assert n >= 3
+    assert engine.retrieve("anything about the user") == []
+
+
+def test_forget_matching_includes_closed_history(engine):
+    engine.ingest_message("I work at Google.")
+    time.sleep(0.01)
+    engine.ingest_message("I work at Meta.")  # closes the Google fact
+    # deleting by predicate removes both current and closed rows
+    n = engine.forget_matching("default", predicate="works_at")
+    assert n == 2
+
+
+def test_forget_matching_requires_a_filter(engine):
+    import pytest
+    with pytest.raises(ValueError):
+        engine.forget_matching("default")
 
 
 def test_namespace_isolation(engine):

@@ -25,6 +25,18 @@ need a call from product/eng, ideally informed by real usage.
   until a real endpoint is configured.
 - ✅ **Credentials in handoffs.** `credential`-typed facts are withheld from the
   handoff text by default; their existence is noted.
+- ✅ **Contradiction granularity (multi-valued predicates).** Facts now carry a
+  per-predicate **cardinality**. SINGLE-valued predicates (`works_at`,
+  `has_name`, …) supersede on change; MULTI-valued (`uses`, `prefers`, …)
+  accumulate — "I use Postgres" and "I use Redis" are both current. Unknown
+  predicates default to SINGLE; extend via `MULTI_VALUED_PREDICATES` /
+  `SINGLE_VALUED_PREDICATES`, or the LLM extractor's per-fact `replaces` flag.
+  Conflict surfacing now fires only on a real supersede (a closed validity
+  window exists), so concurrent multi-valued facts aren't mislabeled a conflict.
+- ✅ **Single-fact hard delete (GDPR).** `forget_fact(id)` removes one fact
+  (including its closed history); `forget_matching(ns, subject=…/predicate=…/
+  object=…)` erases everything about an entity. These hard-delete and win over
+  the preserve-history default; `forget(ns)` still wipes a whole namespace.
 
 ## Open — need a decision
 
@@ -33,10 +45,6 @@ need a call from product/eng, ideally informed by real usage.
   should DMem store them at all? Options: (a) store tagged + encrypted at rest,
   (b) redact-and-drop, (c) store but never embed. Currently stored tagged and
   embedded — **revisit before any production use.** No encryption-at-rest yet.
-- ❓ **GDPR vs. bi-temporal "never delete".** Contradicted facts are *closed*,
-  not deleted — good for history, but a hard right-to-be-forgotten request must
-  win. `forget(namespace)` hard-deletes a whole tenant; there is **no
-  single-fact hard delete** yet. Add one?
 - ❓ **PII handling / redaction policy.** No PII detection on ingest. Should the
   extractor redact or flag emails/phone/SSNs?
 - ❓ **Encryption at rest** for the SQLite file and embeddings — not implemented.
@@ -52,10 +60,11 @@ need a call from product/eng, ideally informed by real usage.
   common first-person statements only. It will miss most third-person and
   implicit facts — a real LLM extractor (`LLM_HOST_URL`) is strongly recommended
   for production. Is heuristic-only ever acceptable, or should we warn harder?
-- ❓ **Contradiction granularity.** Same `subject+predicate`/different `object`
-  is treated as a contradiction. This is too coarse for multi-valued predicates
-  (e.g. "I use Postgres" *and* "I use Redis" are both true, not a contradiction).
-  Need a notion of single- vs multi-valued predicates.
+- ❓ **Mutually-exclusive multi-valued values.** Cardinality fixed the additive
+  case, but a MULTI predicate can still hold mutually-exclusive values on one
+  dimension (e.g. `prefers dark mode` vs `prefers light mode`). Resolving that
+  needs value-level semantics (the LLM `replaces` signal, or dimension tagging);
+  today both accumulate and aren't flagged as a conflict. Acceptable for now.
 
 ### Scale / operational
 - ❓ **SQLite vector search is O(n)** brute force. Fine for personal scale; at

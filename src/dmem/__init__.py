@@ -17,8 +17,8 @@ Quick start:
 from .config import Config, Tier
 from .engine import DMemEngine
 from .errors import ConfigError, DMemError, ProviderError, RetrievalError, StoreError
-from .types import (Chunk, Episode, Fact, FactType, Handoff, Provenance,
-                    RetrievalResult)
+from .types import (Cardinality, Chunk, Episode, Fact, FactType, Handoff,
+                    Provenance, RetrievalResult)
 
 __version__ = "0.1.0"
 
@@ -28,6 +28,7 @@ __all__ = [
     "Tier",
     "Fact",
     "FactType",
+    "Cardinality",
     "Chunk",
     "Episode",
     "Provenance",

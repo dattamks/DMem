@@ -20,6 +20,7 @@ from enum import Enum
 from typing import Optional
 
 from .errors import ConfigError
+from .types import Cardinality
 
 
 class Tier(str, Enum):
@@ -72,6 +73,20 @@ def _get_int(env: dict[str, str], key: str, default: int) -> int:
         return int(raw)
     except ValueError as e:
         raise ConfigError(f"{key}={raw!r} must be an integer.") from e
+
+
+def _parse_cardinality_overrides(env: dict[str, str]) -> dict[str, Cardinality]:
+    """Build predicate->cardinality overrides from two comma-separated env vars."""
+    overrides: dict[str, Cardinality] = {}
+    for pred in (env.get("MULTI_VALUED_PREDICATES") or "").split(","):
+        p = pred.strip().lower()
+        if p:
+            overrides[p] = Cardinality.MULTI
+    for pred in (env.get("SINGLE_VALUED_PREDICATES") or "").split(","):
+        p = pred.strip().lower()
+        if p:
+            overrides[p] = Cardinality.SINGLE
+    return overrides
 
 
 def _get_float(env: dict[str, str], key: str, default: float) -> float:
@@ -162,6 +177,11 @@ class Config:
 
     default_namespace: str = "default"
 
+    # Per-predicate cardinality overrides (extends the built-in defaults).
+    # Controls contradiction handling: SINGLE supersedes on change, MULTI
+    # accumulates. Populated from MULTI_VALUED_PREDICATES / SINGLE_VALUED_PREDICATES.
+    predicate_cardinality_overrides: dict[str, Cardinality] = field(default_factory=dict)
+
     # --------------------------------------------------------------------- #
     @classmethod
     def from_env(cls, env: Optional[dict[str, str]] = None) -> "Config":
@@ -204,6 +224,7 @@ class Config:
             not in ("0", "false", "no"),
             rerank_model=_get(env, "RERANK_MODEL"),
             default_namespace=_get(env, "DMEM_NAMESPACE") or "default",
+            predicate_cardinality_overrides=_parse_cardinality_overrides(env),
         )
         cfg.validate()
         return cfg

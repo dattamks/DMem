@@ -58,6 +58,71 @@ class FactType(str, Enum):
             return cls.OTHER
 
 
+class Cardinality(str, Enum):
+    """Whether a (subject, predicate) can hold one value or many at once.
+
+    This drives contradiction handling. A SINGLE-valued predicate (e.g.
+    ``works_at``) supersedes on change — the old value's validity window is
+    closed. A MULTI-valued predicate (e.g. ``uses``) accumulates — "I use
+    Postgres" and "I use Redis" are both true, not a contradiction.
+    """
+
+    SINGLE = "single"
+    MULTI = "multi"
+
+    @classmethod
+    def coerce(cls, value: "str | Cardinality | None") -> "Optional[Cardinality]":
+        if value is None:
+            return None
+        if isinstance(value, Cardinality):
+            return value
+        try:
+            return cls(str(value).strip().lower())
+        except ValueError:
+            return None
+
+
+# Default cardinality per predicate. Unknown predicates default to SINGLE
+# (preserving supersede-on-change), so genuinely additive predicates must be
+# listed here or overridden via MULTI_VALUED_PREDICATES. Predicates emitted by
+# the heuristic extractor are all covered.
+DEFAULT_PREDICATE_CARDINALITY: dict[str, Cardinality] = {
+    # single-valued: latest value wins, prior value is closed
+    "has_name": Cardinality.SINGLE,
+    "is": Cardinality.SINGLE,
+    "works_at": Cardinality.SINGLE,
+    "is_named": Cardinality.SINGLE,
+    "scheduled_for": Cardinality.SINGLE,
+    "lives_in": Cardinality.SINGLE,
+    "email_is": Cardinality.SINGLE,
+    "reports_to": Cardinality.SINGLE,
+    "born_on": Cardinality.SINGLE,
+    # multi-valued: values accumulate; all remain current
+    "uses": Cardinality.MULTI,
+    "prefers": Cardinality.MULTI,
+    "likes": Cardinality.MULTI,
+    "dislikes": Cardinality.MULTI,
+    "decided": Cardinality.MULTI,
+    "knows": Cardinality.MULTI,
+    "owns": Cardinality.MULTI,
+    "speaks": Cardinality.MULTI,
+    "has_skill": Cardinality.MULTI,
+    "manages": Cardinality.MULTI,
+}
+
+
+def predicate_cardinality(
+    predicate: str,
+    overrides: "Optional[dict[str, Cardinality]]" = None,
+    default: Cardinality = Cardinality.SINGLE,
+) -> Cardinality:
+    """Resolve a predicate's cardinality: overrides > defaults > fallback."""
+    p = predicate.strip().lower()
+    if overrides and p in overrides:
+        return overrides[p]
+    return DEFAULT_PREDICATE_CARDINALITY.get(p, default)
+
+
 # Default priority ordering for token-budgeted handoff. Higher = kept longer.
 # When the handoff is over budget, the lowest-priority facts drop first.
 FACT_TYPE_PRIORITY: dict[FactType, int] = {

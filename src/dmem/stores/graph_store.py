@@ -150,6 +150,38 @@ class GraphStore:
         rows = self._d.run("MATCH (f:Fact {id:$id}) RETURN f", id=fact_id)
         return _row_to_fact(rows[0]) if rows else None
 
+    def delete_fact(self, fact_id: str) -> bool:
+        rows = self._d.run(
+            "MATCH (f:Fact {id:$id}) DETACH DELETE f RETURN count(f) AS c",
+            id=fact_id)
+        try:
+            return bool(rows and int(rows[0]["c"]) > 0)
+        except Exception:  # pragma: no cover
+            return False
+
+    def delete_facts(self, namespace: str, *, subject=None, predicate=None,
+                     object=None) -> int:
+        if not any([subject, predicate, object]):
+            raise ValueError("delete_facts needs at least one filter.")
+        clauses = ["f.namespace=$ns"]
+        params: dict = {"ns": namespace}
+        if subject:
+            clauses.append("toLower(f.subject)=$subject")
+            params["subject"] = subject.strip().lower()
+        if predicate:
+            clauses.append("toLower(f.predicate)=$predicate")
+            params["predicate"] = predicate.strip().lower()
+        if object:
+            clauses.append("toLower(f.object)=$object")
+            params["object"] = object.strip().lower()
+        rows = self._d.run(
+            f"MATCH (f:Fact) WHERE {' AND '.join(clauses)} "
+            f"DETACH DELETE f RETURN count(f) AS c", **params)
+        try:
+            return int(rows[0]["c"]) if rows else 0
+        except Exception:  # pragma: no cover
+            return 0
+
     # -- documents (consolidated tier only) --------------------------------
     def upsert_chunks(self, chunks: Sequence[Chunk]) -> None:
         if not self._hold_chunks:

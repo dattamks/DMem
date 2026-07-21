@@ -37,8 +37,8 @@ from .retrieval.handoff import build_handoff
 from .retrieval.hybrid import HybridRetriever
 from .retrieval.scoring import detect_conflicts, reciprocal_rank_fusion
 from .stores.factory import build_store
-from .types import (Chunk, Episode, Fact, Handoff, Provenance,
-                    RetrievalResult)
+from .types import (Cardinality, Chunk, Episode, Fact, Handoff, Provenance,
+                    RetrievalResult, predicate_cardinality)
 
 
 class DMemEngine:
@@ -87,29 +87,48 @@ class DMemEngine:
                         object=ex.object, fact_type=ex.fact_type,
                         provenance=prov, namespace=ns, confidence=ex.confidence,
                         valid_from=now, recorded_at=now)
-            saved = self._store_fact_with_conflict_handling(fact, now)
+            supersede = self._should_supersede(ex)
+            saved = self._store_fact_with_conflict_handling(fact, now, supersede)
             if saved is not None:
                 stored.append(saved)
         return stored
 
-    def _store_fact_with_conflict_handling(self, fact: Fact,
-                                           now: float) -> Optional[Fact]:
+    def _should_supersede(self, ex) -> bool:
+        """Decide whether a new value retires prior values of the same
+        (subject, predicate), based on the predicate's cardinality.
+
+        - Explicit ``replaces`` from the extractor wins (True/False).
+        - Otherwise SINGLE-valued predicates supersede; MULTI-valued accumulate.
+        A cardinality hint on the extracted fact overrides the registry."""
+        if getattr(ex, "replaces", None) is True:
+            return True
+        if getattr(ex, "replaces", None) is False:
+            return False
+        card = getattr(ex, "cardinality", None) or predicate_cardinality(
+            ex.predicate, self.config.predicate_cardinality_overrides)
+        return card is Cardinality.SINGLE
+
+    def _store_fact_with_conflict_handling(
+        self, fact: Fact, now: float, supersede: bool = True) -> Optional[Fact]:
         # 1) Exact dedup: identical subject+predicate+object already current.
         existing = self.store.find_fact_by_dedup_key(fact.namespace,
                                                      fact.dedup_key())
         if existing is not None:
             return None  # already known; skip (dedup)
 
-        # 2) Contradiction: same subject+predicate, different object -> close old.
-        current = self.store.find_current_facts(fact.namespace, fact.subject,
-                                                fact.predicate)
-        superseded_id = None
-        for old in current:
-            if old.object.strip().lower() != fact.object.strip().lower():
-                self.store.close_fact(old.id, valid_to=now)
-                superseded_id = old.id  # link the most recent one
-        if superseded_id:
-            fact.supersedes = superseded_id
+        # 2) Contradiction handling — only for single-valued (or explicitly
+        #    replacing) predicates. Multi-valued predicates accumulate:
+        #    "I use Postgres" and "I use Redis" are both current, not a conflict.
+        if supersede:
+            current = self.store.find_current_facts(fact.namespace, fact.subject,
+                                                    fact.predicate)
+            superseded_id = None
+            for old in current:
+                if old.object.strip().lower() != fact.object.strip().lower():
+                    self.store.close_fact(old.id, valid_to=now)
+                    superseded_id = old.id  # link the most recent one
+            if superseded_id:
+                fact.supersedes = superseded_id
 
         fact.embedding = self.embedder.embed_one(fact.statement)
         self.store.upsert_fact(fact)
@@ -228,6 +247,28 @@ class DMemEngine:
     def forget(self, namespace: str) -> int:
         """Hard-delete everything for a namespace (right-to-be-forgotten)."""
         return self.store.delete_namespace(namespace)
+
+    def forget_fact(self, fact_id: str) -> bool:
+        """Hard-delete a single fact by id, including any closed history for it.
+
+        Unlike contradiction handling (which *closes* a fact's validity window),
+        this permanently removes it — for a targeted right-to-be-forgotten
+        request that must win over the preserve-history default."""
+        return self.store.delete_fact(fact_id)
+
+    def forget_matching(self, namespace: str, *, subject: Optional[str] = None,
+                        predicate: Optional[str] = None,
+                        object: Optional[str] = None) -> int:
+        """Hard-delete all facts (current and closed) matching the given fields.
+
+        At least one of subject/predicate/object must be provided. Use e.g.
+        ``forget_matching(ns, subject="Ada Lovelace")`` to erase everything
+        recorded about one entity."""
+        if not any([subject, predicate, object]):
+            raise ValueError("forget_matching needs at least one of "
+                             "subject/predicate/object.")
+        return self.store.delete_facts(namespace, subject=subject,
+                                       predicate=predicate, object=object)
 
     def close(self) -> None:
         self.store.close()

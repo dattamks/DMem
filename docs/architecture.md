@@ -33,15 +33,32 @@ gets provenance → contradiction handling → dedup → embed → store.
 heading into concept sections with metadata) → structure-aware chunking (respect
 concept boundaries, keep tables whole) → dedup by content hash → embed → store.
 
-### Contradiction handling (bi-temporal)
+### Contradiction handling (bi-temporal + cardinality)
 
 On `ingest_message`, for each candidate fact:
 
 1. **Exact dedup** — identical `(namespace, subject, predicate, object)` already
    current → skip.
-2. **Contradiction** — same `subject+predicate`, different `object` → close the
-   old fact's validity window (`valid_to = now`), store the new one with
-   `supersedes` linking the old. Nothing is deleted; history stays queryable.
+2. **Cardinality check** — resolve the predicate's cardinality (registry +
+   `MULTI_VALUED_PREDICATES`/`SINGLE_VALUED_PREDICATES` overrides + the
+   extractor's optional `replaces` flag):
+   - **SINGLE-valued** (`works_at`, `has_name`, …) or explicit `replaces=True` →
+     close prior current values (`valid_to = now`) and store the new one with
+     `supersedes` linking the old. Nothing is deleted; history stays queryable.
+   - **MULTI-valued** (`uses`, `prefers`, …) → **accumulate**; both values stay
+     current. Unknown predicates default to SINGLE.
+
+Conflict surfacing (at retrieval) fires only when a value was genuinely
+superseded — i.e. a closed validity window exists — so concurrent multi-valued
+facts are not mislabeled as conflicts.
+
+### Deletion (GDPR)
+
+- `forget(namespace)` — wipe a whole tenant.
+- `forget_fact(fact_id)` — hard-delete one fact, including its closed history.
+- `forget_matching(namespace, subject=…/predicate=…/object=…)` — erase every
+  fact about an entity. These hard-delete and override the preserve-history
+  default (distinct from the bi-temporal *close*).
 
 ## Retrieval
 

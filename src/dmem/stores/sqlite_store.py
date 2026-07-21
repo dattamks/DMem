@@ -180,6 +180,34 @@ class SQLiteStore:
             ).fetchone()
         return self._row_to_fact(row) if row else None
 
+    def delete_fact(self, fact_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM facts WHERE id=?", (fact_id,))
+            self._conn.commit()
+            return cur.rowcount > 0
+
+    def delete_facts(self, namespace: str, *, subject: Optional[str] = None,
+                     predicate: Optional[str] = None,
+                     object: Optional[str] = None) -> int:
+        if not any([subject, predicate, object]):
+            raise ValueError("delete_facts needs at least one filter.")
+        clauses = ["namespace=?"]
+        params: list = [namespace]
+        if subject:
+            clauses.append("lower(subject)=?")
+            params.append(subject.strip().lower())
+        if predicate:
+            clauses.append("lower(predicate)=?")
+            params.append(predicate.strip().lower())
+        if object:
+            clauses.append("lower(object)=?")
+            params.append(object.strip().lower())
+        with self._lock:
+            cur = self._conn.execute(
+                f"DELETE FROM facts WHERE {' AND '.join(clauses)}", params)
+            self._conn.commit()
+            return cur.rowcount or 0
+
     # -- documents ---------------------------------------------------------
     def upsert_chunks(self, chunks: Sequence[Chunk]) -> None:
         with self._lock:

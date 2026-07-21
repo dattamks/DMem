@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Optional, Protocol, runtime_checkable
 
 from ..providers.llm import LLMProvider
-from ..types import FactType
+from ..types import Cardinality, FactType
 
 
 @dataclass
@@ -32,6 +32,11 @@ class ExtractedFact:
     object: str
     fact_type: FactType
     confidence: float = 0.7
+    # Optional contradiction hints. When None, the engine resolves cardinality
+    # from the predicate registry. ``replaces=True`` forces supersede regardless
+    # of cardinality (e.g. the LLM detects "I switched from X to Y").
+    cardinality: "Cardinality | None" = None
+    replaces: "bool | None" = None
 
 
 @runtime_checkable
@@ -122,9 +127,13 @@ def _clean_object(raw: str) -> str:
 _LLM_SYSTEM = (
     "You extract durable facts from a message as typed triples. "
     "Return ONLY a JSON array. Each item: "
-    '{"subject","predicate","object","fact_type","confidence"}. '
+    '{"subject","predicate","object","fact_type","confidence","replaces"}. '
     "fact_type is one of: preference, decision, project_fact, identity, "
     "credential, relationship, event, other. "
+    '"replaces" is a boolean: true ONLY when the statement explicitly changes a '
+    "prior value (e.g. 'I switched from X to Y', 'my new address is'), so the "
+    "old value should be retired. false when it merely adds another concurrent "
+    "value (e.g. another tool the user uses). Omit if unsure. "
     "Extract only stable facts worth remembering, not chit-chat. "
     "Use the literal speaker label as subject for first-person statements. "
     "If nothing is worth storing, return []."
@@ -144,12 +153,15 @@ class LLMFactExtractor:
         out: list[ExtractedFact] = []
         for item in data:
             try:
+                replaces = item.get("replaces")
                 out.append(ExtractedFact(
                     subject=str(item["subject"]).strip(),
                     predicate=str(item["predicate"]).strip(),
                     object=str(item["object"]).strip(),
                     fact_type=FactType.coerce(item.get("fact_type")),
                     confidence=float(item.get("confidence", 0.8)),
+                    cardinality=Cardinality.coerce(item.get("cardinality")),
+                    replaces=bool(replaces) if isinstance(replaces, bool) else None,
                 ))
             except (KeyError, TypeError, ValueError):
                 continue

@@ -97,6 +97,13 @@ def detect_conflicts(results: dict[str, RetrievalResult]) -> list[dict]:
         objects = {str(r.payload.get("object", "")).strip().lower() for r in group}
         if len(objects) <= 1:
             continue
+        # A genuine "changed fact" is one where a prior value was actually
+        # superseded — i.e. at least one member has a closed validity window.
+        # Multiple concurrent values of a multi-valued predicate (all current)
+        # are NOT a conflict, just co-existing facts.
+        has_closed = any(r.payload.get("valid_to") not in (None, "") for r in group)
+        if not has_closed:
+            continue
         # Newest current value vs older/closed ones.
         group.sort(key=lambda r: float(r.payload.get("recorded_at") or 0),
                    reverse=True)

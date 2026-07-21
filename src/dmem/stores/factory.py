@@ -58,6 +58,10 @@ class ProStore:
     def find_current_facts(self, ns, s, p): return self._graph.find_current_facts(ns, s, p)
     def close_fact(self, fid, vto): self._graph.close_fact(fid, vto)
     def get_fact(self, fid): return self._graph.get_fact(fid)
+    def delete_fact(self, fid): return self._graph.delete_fact(fid)
+    def delete_facts(self, ns, *, subject=None, predicate=None, object=None):
+        return self._graph.delete_facts(ns, subject=subject, predicate=predicate,
+                                        object=object)
 
     # documents -> pgvector
     def upsert_chunks(self, chunks): self._docs.upsert_chunks(chunks)
