@@ -50,6 +50,33 @@ when it's running on the offline floor.
 Behavioral checks failing is a real regression regardless of embedder — they
 assert the memory *semantics*, not ranking.
 
+## Token-savings measurement (`dmem-token-savings`)
+
+Separate from retrieval quality, this **measures the actual context tokens** sent
+to an LLM WITH vs WITHOUT DMem across the three target scenarios:
+
+```bash
+dmem-token-savings
+```
+
+Measured mechanism savings (offline embedder; `%` is a ratio, so it's
+tokenizer-robust even though a real BPE vocab can't be fetched offline):
+
+| Scenario | Baseline → DMem | Saving |
+|---|---|---|
+| documents (selective retrieval vs. full doc each turn) | ~5,982 → ~1,845 | **~69%** |
+| long conversation (compaction vs. full transcript) | ~2,280 → ~991 | **~57%** |
+| model switch (budgeted handoff vs. full history) | ~729 → ~44 | **~94%** |
+| **blended** | | **~68%** |
+
+These land inside the PRD's directional ranges. Two honest caveats:
+- It measures **context volume** (what hits the LLM). It excludes DMem's own
+  overhead — an embedding call per ingest and the injected-memory block on each
+  proxied request — which reduce **net** savings.
+- Document savings **scale with document size**: the bigger the document relative
+  to the retrieved slice, the higher the saving. Short single-model no-document
+  chats save ~0% (possibly net-negative).
+
 ## Extending the dataset
 
 `dmem.eval.dataset.SMOKE_SCENARIOS` is plain Python. Add a `Scenario` with

@@ -53,6 +53,7 @@ test-pg = ["pgserver>=0.1.4", "psycopg[binary]>=3.1"]
 [project.scripts]
 dmem-mcp = "dmem.adapters.mcp_server:main"
 dmem-eval = "dmem.eval.harness:main"
+dmem-token-savings = "dmem.eval.tokens:main"
 dmem-doctor = "dmem.doctor:main"
 
 [project.urls]
@@ -65,3 +66,4 @@ packages = ["src/dmem"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+asyncio_mode = "auto"

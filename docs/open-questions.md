@@ -122,6 +122,23 @@ need a call from product/eng, ideally informed by real usage.
   servers (gated suite). A combined pro-tier engine test (networked graph +
   pgvector together) is also still to add.
 
+### Validation status (what's actually been run)
+- ✅ **Live MCP handshake.** A real MCP `ClientSession` connects to `dmem-mcp`
+  in-process (SDK memory transport) and drives the full flow — initialize,
+  list_tools, remember/recall/handoff/ingest_document/forget. The VS-Code-path
+  protocol layer is proven (`tests/integration/test_mcp_live.py`).
+- ✅ **Proxy over real HTTP.** Real `httpx` against a localhost fake OpenAI
+  server: non-streaming JSON and byte-for-byte SSE streaming, with memory
+  injection confirmed reaching the upstream and the streamed reply teed into
+  memory (`tests/integration/test_proxy_http_live.py`).
+- ✅ **Token savings measured**, not just estimated: ~69% documents / ~57% long
+  conversation / ~94% model switch / ~68% blended (`dmem-token-savings`). Ratio
+  is tokenizer-robust; excludes DMem's own overhead.
+- ✅ **pgvector + Kuzu validated against real engines** (earlier). 
+- ❓ **Still unrun live:** Neo4j/FalkorDB servers, real cloud embedding/LLM
+  vendors, real cross-encoder rerank, and the VS Code extension UI itself
+  (protocol proven; the editor integration is not).
+
 ### Product stance: BYO-only, pro is the product
 - ✅ **Mandatory prerequisites, fail fast.** `pro` is the default and the only
   supported production tier: a graph DB + Postgres/pgvector + an embedding
