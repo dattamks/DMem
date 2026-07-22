@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Everything that self-contains via pip (no external servers): SQLite + Kuzu +
+  # pgvector-via-pgserver + MCP live + proxy real-HTTP + embeddings real-HTTP.
+  # ---------------------------------------------------------------------------
+  offline:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: pip install -e ".[dev,mcp,http,kuzu,test-pg]"
+      - name: Test (offline + self-contained integration)
+        run: pytest -q
+
+  # ---------------------------------------------------------------------------
+  # Live graph servers as service containers — validates the Neo4j/FalkorDB
+  # backends that can't run in the dev sandbox. Uses the gated suite that reads
+  # DMEM_TEST_GRAPH_* (skips when unset).
+  # ---------------------------------------------------------------------------
+  integration-neo4j:
+    runs-on: ubuntu-latest
+    services:
+      neo4j:
+        image: neo4j:5
+        env:
+          NEO4J_AUTH: neo4j/testpassword
+        ports: ["7687:7687", "7474:7474"]
+        options: >-
+          --health-cmd "wget -qO- http://localhost:7474 || exit 1"
+          --health-interval 10s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,neo4j,pgvector,http]"
+      - name: Graph integration (Neo4j)
+        env:
+          DMEM_TEST_GRAPH_KIND: neo4j
+          DMEM_TEST_GRAPH_URL: bolt://localhost:7687
+          DMEM_TEST_GRAPH_USER: neo4j
+          DMEM_TEST_GRAPH_PASSWORD: testpassword
+        run: pytest tests/integration/test_graph_tier.py -q
+
+  integration-falkordb:
+    runs-on: ubuntu-latest
+    services:
+      falkordb:
+        image: falkordb/falkordb:latest
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,falkordb,http]"
+      - name: Graph integration (FalkorDB)
+        env:
+          DMEM_TEST_GRAPH_KIND: falkordb
+          DMEM_TEST_GRAPH_URL: redis://localhost:6379
+        run: pytest tests/integration/test_graph_tier.py -q
+
+  # ---------------------------------------------------------------------------
+  # Real vendor APIs — runs only when API keys are provided as repo secrets.
+  # Confirms the one thing localhost fakes can't: real response shapes + quality.
+  # ---------------------------------------------------------------------------
+  vendor-live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,http]"
+      - name: Vendor live (skips without keys)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
+        run: pytest tests/integration/test_vendor_live.py -q -rs

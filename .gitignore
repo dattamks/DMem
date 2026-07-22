@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# DMem local stores
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+dmem.db*
+
+# Env / secrets
+.env
+.env.local
+
+# Node (vscode extension)
+node_modules/
+extensions/vscode/dist/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
