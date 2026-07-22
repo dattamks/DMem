@@ -134,10 +134,20 @@ need a call from product/eng, ideally informed by real usage.
 - ✅ **Token savings measured**, not just estimated: ~69% documents / ~57% long
   conversation / ~94% model switch / ~68% blended (`dmem-token-savings`). Ratio
   is tokenizer-robust; excludes DMem's own overhead.
-- ✅ **pgvector + Kuzu validated against real engines** (earlier). 
+- ✅ **pgvector + Kuzu validated against real engines** (earlier).
+- ✅ **Embedding providers over real HTTP.** OpenAI-compatible, Google, and
+  Cohere adapters driven against a localhost vendor server — auth headers, URL
+  building, request body, and response parsing all verified over httpx
+  (`tests/integration/test_embeddings_http_live.py`).
+- ✅ **Pro composite with two real backends.** `ProStore` routing facts→Kuzu and
+  documents→pgvector, incl. the merged vector search and cross-store delete,
+  validated against real engines (`tests/integration/test_pro_composite.py`).
+- ✅ **Concurrency + persistence.** Multi-threaded ingest/retrieve on SQLite and
+  Kuzu (no races, correct counts) and data survival across engine restart
+  (`tests/test_concurrency_persistence.py`).
 - ❓ **Still unrun live:** Neo4j/FalkorDB servers, real cloud embedding/LLM
-  vendors, real cross-encoder rerank, and the VS Code extension UI itself
-  (protocol proven; the editor integration is not).
+  vendors (only localhost fakes), real cross-encoder rerank, and the VS Code
+  extension UI itself (MCP protocol proven; the editor integration is not).
 
 ### Product stance: BYO-only, pro is the product
 - ✅ **Mandatory prerequisites, fail fast.** `pro` is the default and the only
