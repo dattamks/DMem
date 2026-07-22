@@ -166,19 +166,30 @@ class GraphStore:
 
     def initialize(self) -> None:
         try:
-            self._d.run(
-                "CREATE CONSTRAINT dmem_fact_id IF NOT EXISTS "
-                "FOR (f:Fact) REQUIRE f.id IS UNIQUE")
-            self._d.run(
-                "CREATE CONSTRAINT dmem_entity_name IF NOT EXISTS "
-                "FOR (e:Entity) REQUIRE (e.namespace, e.name) IS UNIQUE")
-            self._d.create_vector_index(FACT_LABEL, "embedding", FACT_VEC_INDEX,
-                                        self._embed_dim)
-            if self._hold_chunks:
-                self._d.create_vector_index(CHUNK_LABEL, "embedding",
-                                            CHUNK_VEC_INDEX, self._embed_dim)
+            if self._d.kind is GraphKind.NEO4J:
+                # Neo4j: uniqueness constraints + native vector index.
+                self._d.run(
+                    "CREATE CONSTRAINT dmem_fact_id IF NOT EXISTS "
+                    "FOR (f:Fact) REQUIRE f.id IS UNIQUE")
+                self._d.run(
+                    "CREATE CONSTRAINT dmem_entity_name IF NOT EXISTS "
+                    "FOR (e:Entity) REQUIRE (e.namespace, e.name) IS UNIQUE")
+                self._d.create_vector_index(FACT_LABEL, "embedding",
+                                            FACT_VEC_INDEX, self._embed_dim)
+                if self._hold_chunks:
+                    self._d.create_vector_index(CHUNK_LABEL, "embedding",
+                                                CHUNK_VEC_INDEX, self._embed_dim)
+            # FalkorDB: does NOT support Cypher CREATE CONSTRAINT, and its native
+            # vector index needs vecf32-typed storage. To stay dialect-robust we
+            # skip both and use brute-force cosine retrieval (see vector_search).
+            # Logical dedup is preserved via MERGE-by-id.
         except Exception as e:  # pragma: no cover - server dependent
             raise StoreError(f"Graph initialize failed: {e}") from e
+
+    @property
+    def _native_vectors(self) -> bool:
+        # Neo4j has a native vector index; FalkorDB uses brute-force cosine.
+        return getattr(self._d, "kind", GraphKind.NEO4J) is GraphKind.NEO4J
 
     def close(self) -> None:
         self._d.close()
@@ -280,6 +291,9 @@ class GraphStore:
     # -- retrieval ---------------------------------------------------------
     def vector_search(self, namespace, query_embedding, top_k,
                       kinds=("fact", "chunk")) -> list[VectorHit]:
+        if not self._native_vectors:
+            return self._brute_force_vector_search(
+                namespace, query_embedding, top_k, kinds)
         hits: list[VectorHit] = []
         if "fact" in kinds:
             for r in self._d.vector_query(FACT_LABEL, "embedding", FACT_VEC_INDEX,
@@ -294,6 +308,35 @@ class GraphStore:
                 n = r["node"]
                 hits.append(VectorHit(id=n["id"], text=n.get("text", ""),
                                       score=float(r.get("score", 0.0)),
+                                      kind="chunk", payload=n))
+        hits.sort(key=lambda h: h.score, reverse=True)
+        return hits[:top_k]
+
+    def _brute_force_vector_search(self, namespace, query_embedding, top_k,
+                                   kinds) -> list[VectorHit]:
+        """Backend-agnostic cosine search (fetch embeddings, score in Python).
+        Used by FalkorDB, which stores embeddings as plain lists rather than a
+        native vector-indexed type."""
+        hits: list[VectorHit] = []
+        if "fact" in kinds:
+            rows = self._d.run(
+                "MATCH (f:Fact) WHERE f.namespace=$ns AND f.embedding IS NOT NULL "
+                "RETURN f", ns=namespace)
+            for r in rows:
+                n = r["f"]
+                hits.append(VectorHit(id=n["id"], text=_fact_text(n),
+                                      score=_cosine(query_embedding,
+                                                    n.get("embedding")),
+                                      kind="fact", payload=n))
+        if "chunk" in kinds and self._hold_chunks:
+            rows = self._d.run(
+                "MATCH (c:Chunk) WHERE c.namespace=$ns AND c.embedding IS NOT NULL "
+                "RETURN c", ns=namespace)
+            for r in rows:
+                n = r["c"]
+                hits.append(VectorHit(id=n["id"], text=n.get("text", ""),
+                                      score=_cosine(query_embedding,
+                                                    n.get("embedding")),
                                       kind="chunk", payload=n))
         hits.sort(key=lambda h: h.score, reverse=True)
         return hits[:top_k]
@@ -363,6 +406,16 @@ class GraphStore:
             "MATCH (n {namespace:$ns}) DETACH DELETE n RETURN count(n) AS c",
             ns=namespace)
         return _count(rows)
+
+
+def _cosine(a, b) -> float:
+    import math
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
 
 
 def _fact_text(n: dict) -> str:

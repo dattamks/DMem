@@ -130,6 +130,8 @@ def test_run_normalizes_neo4j_records():
 class FakeDriver:
     """Returns canned normalized rows; records queries. Emulates the run()
     contract, not Cypher semantics."""
+    kind = GraphKind.NEO4J  # exercises the native vector_query path
+
     def __init__(self):
         self.run_returns = deque()
         self.vector_returns = deque()
