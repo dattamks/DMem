@@ -165,6 +165,15 @@ dmem-eval --json
 Lighter than formal benchmarking (which stays deferred) — see
 [`docs/evaluation.md`](docs/evaluation.md).
 
+## Confidence & validation
+
+What's actually been run (against real engines/protocols) vs. still estimated —
+including what works at ~100%, and how to test the network-blocked pieces (CI
+service containers + gated vendor tests) — is in
+[`docs/confidence.md`](docs/confidence.md). CI (`.github/workflows/ci.yml`) runs
+the self-contained suite on every push, plus live Neo4j/FalkorDB (service
+containers) and real vendor APIs (when keys are configured).
+
 ## Status & scope
 
 Alpha. Formal benchmarking (LongMemEval / LoCoMo) is **deferred** until there's
