@@ -104,9 +104,16 @@ need a call from product/eng, ideally informed by real usage.
   differ. Both branches are implemented in `_CypherDriver.create_vector_index` /
   `vector_query` from documented syntax but **need validation against a live
   server** — that's what `tests/integration` is for (gated on `DMEM_TEST_GRAPH_URL`).
-- ❓ **Pro-tier integration tests.** Consolidated tier has a live-server suite;
-  the pro composite (graph facts + pgvector docs) has manual smoke instructions
-  only. Add automated pro-tier integration tests.
+- ✅ **pgvector validated for real (no Docker).** `tests/integration/
+  test_pgvector_tier.py` uses `pgserver` (pip-bundled Postgres+pgvector) to run
+  the document store end to end — extension enable, HNSW vector search, full-text
+  keyword search, dedup, namespace isolation/delete, meta, table-prefix
+  isolation. The `ensure_pgvector` probe and PgVectorStore are no longer stub-
+  only. (Confirmed against Postgres 16 / pgvector 0.6.2.)
+- ❓ **Graph half + combined pro engine.** The graph store (facts) still needs a
+  real Neo4j/FalkorDB (image pulls are blocked in this sandbox; run the gated
+  suite where reachable). A single combined pro-tier engine test (graph +
+  pgvector together) is still to add.
 
 ### Product stance: BYO-only, pro is the product
 - ✅ **Mandatory prerequisites, fail fast.** `pro` is the default and the only

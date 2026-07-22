@@ -43,9 +43,23 @@ but should be validated against your server version — this is exactly what the
 integration suite is for. The result-shape normalization (Neo4j Records vs
 FalkorDB positional rows + `.properties` nodes) IS covered offline.
 
-## Pro tier (pgvector + graph)
+## Pro tier — pgvector (real, no Docker needed)
 
-The pro tier composes a graph store (facts) with pgvector (documents). Point a
-Postgres+pgvector instance and a graph server at the engine with `MEMORY_TIER=pro`
-and the corresponding env vars (see `.env.example`) to smoke-test it; automated
-pro-tier integration tests are a follow-up.
+The pgvector document store has **real** integration tests that don't need Docker
+or a server you manage: `pgserver` (pip) bundles a PostgreSQL + pgvector binary,
+so the suite spins up a genuine local Postgres and exercises the store end to end
+(extension enable, HNSW vector search, full-text keyword search, dedup, namespace
+isolation/delete, meta, table-prefix isolation).
+
+```bash
+pip install -e ".[pgvector,dev,test-pg]"
+pytest tests/integration/test_pgvector_tier.py -q
+```
+
+Skips automatically if `pgserver`/`psycopg` aren't installed.
+
+## Pro tier — graph half
+
+The graph store (facts) still needs a real Neo4j/FalkorDB (see above); combined
+with the pgvector tests, that covers both halves of the pro composite. A single
+combined pro-tier engine test (graph + pgvector together) is a follow-up.
