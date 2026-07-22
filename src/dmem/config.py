@@ -51,8 +51,9 @@ class Tier(str, Enum):
 
 
 class GraphKind(str, Enum):
-    NEO4J = "neo4j"
-    FALKORDB = "falkordb"
+    NEO4J = "neo4j"          # networked server (GPLv3)
+    FALKORDB = "falkordb"    # networked server (SSPL)
+    KUZU = "kuzu"            # embedded, in-process, MIT — GRAPH_DB_URL is a path
 
     @classmethod
     def coerce(cls, value: Optional[str]) -> Optional["GraphKind"]:
@@ -62,7 +63,8 @@ class GraphKind(str, Enum):
             return cls(value.strip().lower())
         except ValueError as e:
             raise ConfigError(
-                f"GRAPH_DB={value!r} is invalid. Choose 'neo4j' or 'falkordb'."
+                f"GRAPH_DB={value!r} is invalid. Choose 'neo4j', 'falkordb', "
+                "or 'kuzu' (embedded)."
             ) from e
 
 
@@ -319,6 +321,13 @@ class Config:
         missing: list[str] = []
 
         if self.tier is Tier.PRO:
+            if self.graph.kind is GraphKind.KUZU:
+                raise ConfigError(
+                    "GRAPH_DB=kuzu is an EMBEDDED graph (in-process) and cannot "
+                    "back the pro tier, which pairs a networked graph server with "
+                    "Postgres/pgvector. Use MEMORY_TIER=consolidated for Kuzu "
+                    "(one embedded engine does facts + documents), or set "
+                    "GRAPH_DB=neo4j|falkordb for pro.")
             if not self.graph.kind:
                 missing.append(
                     "GRAPH_DB — your graph database type (neo4j | falkordb)")

@@ -54,6 +54,24 @@ GRAPH_DB_URL=redis://your-falkordb:6379
 
 Or the **sqlite** tier for a single-file store with no server at all.
 
+### No graph server, but real graph + Cypher: embedded Kuzu
+
+If you don't run (or don't want) a networked graph server, and Neo4j's GPLv3 /
+FalkorDB's SSPL licensing is a concern, use **Kuzu** — an **MIT-licensed embedded
+graph database** that runs in-process (like SQLite) with real Cypher and vector
+support. One embedded engine holds facts + documents + graph traversal:
+
+```bash
+pip install "dmem[kuzu]"
+MEMORY_TIER=consolidated
+GRAPH_DB=kuzu
+GRAPH_DB_URL=./dmem_graph.kz      # a filesystem path, not a network URL
+```
+
+Trade-off: embedded means single-process — ideal for an IDE plugin or a single
+app embedding DMem, not a shared networked store for many services at scale
+(that's what Neo4j/FalkorDB + the pro tier are for).
+
 ## Use your embedding vendor
 
 Pick the vendor with `EMBEDDING_PROVIDER` and give it a key — no local model.

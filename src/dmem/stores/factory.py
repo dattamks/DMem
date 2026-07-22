@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from ..config import Config, Tier
+from ..config import Config, GraphKind, Tier
 from .base import GraphHit, MemoryStore, VectorHit
 
 
@@ -22,6 +22,12 @@ def build_store(cfg: Config, embed_dim: int) -> MemoryStore:
         return SQLiteStore(cfg.sqlite_path)
 
     if cfg.tier is Tier.CONSOLIDATED:
+        # Kuzu is embedded (a path, not a network server); it holds both facts
+        # and chunks in-process. Neo4j/FalkorDB are networked servers.
+        if cfg.graph.kind is GraphKind.KUZU:
+            from .kuzu_store import KuzuGraphStore
+            path = cfg.graph.url or "dmem_graph.kz"
+            return KuzuGraphStore(path, embed_dim=embed_dim)
         from .graph_store import GraphStore
         return GraphStore(cfg.graph, hold_chunks=True, embed_dim=embed_dim)
 

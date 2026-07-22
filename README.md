@@ -64,9 +64,15 @@ supported production setup):
 
 | Tier | Backends | Use |
 |---|---|---|
-| `pro` *(default)* | your graph DB (facts) + Postgres/pgvector (documents) + embedding endpoint | **production** |
-| `consolidated` | one graph DB doing both jobs | dev/test |
+| `pro` *(default)* | your graph DB (Neo4j/FalkorDB, facts) + Postgres/pgvector (documents) + embedding endpoint | **production** |
+| `consolidated` | one graph DB doing both jobs — networked (Neo4j/FalkorDB) **or embedded `kuzu`** (MIT, in-process, no server) | dev/test / embedded |
 | `sqlite` | single file, no servers, offline embedder | dev/test |
+
+> **Embedded, MIT-licensed graph option:** `MEMORY_TIER=consolidated GRAPH_DB=kuzu
+> GRAPH_DB_URL=./graph.kz` runs the whole graph (facts + documents + Cypher
+> traversal) in-process via [Kuzu](https://kuzudb.com) — no server, and MIT
+> rather than Neo4j's GPLv3 or FalkorDB's SSPL. Good for IDE-embedded /
+> single-app use. `pip install "dmem[kuzu]"`.
 
 The **interface is identical** at every tier. See [`.env.example`](.env.example)
 for all config.

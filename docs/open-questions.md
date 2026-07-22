@@ -110,10 +110,17 @@ need a call from product/eng, ideally informed by real usage.
   keyword search, dedup, namespace isolation/delete, meta, table-prefix
   isolation. The `ensure_pgvector` probe and PgVectorStore are no longer stub-
   only. (Confirmed against Postgres 16 / pgvector 0.6.2.)
-- ❓ **Graph half + combined pro engine.** The graph store (facts) still needs a
-  real Neo4j/FalkorDB (image pulls are blocked in this sandbox; run the gated
-  suite where reachable). A single combined pro-tier engine test (graph +
-  pgvector together) is still to add.
+- ✅ **Graph logic validated in-process via Kuzu.** A new MIT-licensed **embedded
+  graph backend** (`GRAPH_DB=kuzu`, consolidated tier) runs the FULL engine's
+  graph flow with real Cypher — typed facts, bi-temporal contradiction,
+  multi-valued accumulation, graph traversal, handoff, GDPR deletes — validated
+  by `tests/integration/test_kuzu_tier.py` with no server (Kuzu 0.11.3). This
+  covers the graph *logic* end to end that was previously graph-server-gated.
+- ❓ **Neo4j/FalkorDB dialect still needs live validation.** Kuzu validates the
+  logic, but the Neo4j/FalkorDB-specific Cypher (vector-index procedures,
+  driver result shapes) in `graph_store.py` still needs a run against those live
+  servers (gated suite). A combined pro-tier engine test (networked graph +
+  pgvector together) is also still to add.
 
 ### Product stance: BYO-only, pro is the product
 - ✅ **Mandatory prerequisites, fail fast.** `pro` is the default and the only
